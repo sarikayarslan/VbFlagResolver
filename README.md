@@ -4,6 +4,21 @@ VB5 projesindeki geliştirme bayraklarını (`mDevelopmentFlags.bas`) okuyup `.f
 dosyalarındaki `If/ElseIf/Else` bloklarını bu bayraklara göre sadeleştiren araç. Orijinal dosyalara asla yazmaz;
 çıktıyı ayrı bir klasöre üretir ve rapor verir.
 
+## Hazır exe'yi indirme (derlemeden kullanmak için)
+
+Derlenmiş exe'ler depoda `publish/` klasöründe durur; .NET kurmaya veya derlemeye gerek yoktur.
+
+| Dosya | Açıklama | Doğrudan indirme |
+|---|---|---|
+| `VbFlagResolver.Gui.exe` (~48 MB) | Arayüz | [indir](https://github.com/sarikayarslan/VbFlagResolver/raw/master/publish/VbFlagResolver.Gui.exe) |
+| `VbFlagResolver.exe` (~35 MB) | Komut satırı | [indir](https://github.com/sarikayarslan/VbFlagResolver/raw/master/publish/VbFlagResolver.exe) |
+
+GitHub sayfasından indirmek için: `publish` klasörüne girin → exe'ye tıklayın → sağ üstteki **Download raw file**
+(aşağı ok) düğmesine basın. Tarayıcı veya SmartScreen imzasız exe için uyarı verebilir: **Sakla / Ek bilgi → Yine de çalıştır**.
+
+Kod değiştiğinde exe'ler aşağıdaki 5. adımla yeniden üretilip `publish/` klasörüyle birlikte commit edilmelidir;
+aksi halde depodaki exe eski kodla kalır.
+
 ## Derleme
 
 ### 1. Gerekenler (yalnızca derleyen bilgisayarda)
