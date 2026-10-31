@@ -47,8 +47,16 @@ Public Const MAX_KAYIT As Long = 1000
 Public Declare Function GetTickCount Lib "kernel32" () As Long
 Public gsKullanici As String
 
-Public Sub InitFlags()
+public ArslanFlag as Boolean
+
+Public Sub InitFLags()
     gbFlagMusteriV2 = True
     gbFlagStokSayim = False: gbFlagDebugPanel = True   ' iki atama tek satýrda
     gbFlagCalismaZamani = False
+	ArslanFlag = True
 End Sub
+
+
+public sub DeleteFlags()
+	ArslanFlag = False
+End sub

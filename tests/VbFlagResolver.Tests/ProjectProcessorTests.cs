@@ -42,7 +42,42 @@ public class ProjectProcessorTests
         Assert.Contains("    If gbFlagCalismaZamani Then\r\n        frmStokYeni.Show vbModal\r\n    Else\r\n        frmStok.Show vbModal\r\n    End If", text);
         Assert.Contains("ğüşıöç", text);
 
-        Assert.Contains("Okunan bayrak : 22", report.ToText());
+        Assert.Contains("Okunan bayrak : 23", report.ToText());
+    }
+
+    [Fact]
+    public void Reports_where_flag_procedures_are_called()
+    {
+        var src = TestPaths.NewTempDir();
+        File.WriteAllText(Path.Combine(src, "mFlags.bas"), """
+            Attribute VB_Name = "mFlags"
+            Public gbA As Boolean
+            Public Sub InitFlags()
+                gbA = True
+            End Sub
+            Public Sub XFonksiyonu()
+                gbA = False
+            End Sub
+            """);
+        File.WriteAllText(Path.Combine(src, "modMain.bas"), """
+            Attribute VB_Name = "modMain"
+            Sub Main()
+                Call mFlags.XFonksiyonu
+                InitFlags
+                If Command$ <> "" Then XFonksiyonu
+            End Sub
+            """);
+        var report = ProjectProcessor.Run(new ProcessOptions { FlagsPath = Path.Combine(src, "mFlags.bas"), SourceDir = src, DryRun = true });
+
+        Assert.Equal(["XFonksiyonu", "InitFlags", "XFonksiyonu"], report.ProcedureCalls.Select(c => c.Procedure));
+        Assert.All(report.ProcedureCalls, c => Assert.Equal("Sub Main", c.Caller));
+        Assert.Equal([false, false, true], report.ProcedureCalls.Select(c => c.Conditional));
+        var text = report.ToText();
+        Assert.Contains("modMain.bas, Sub Main: XFonksiyonu (satır 3) → InitFlags (satır 4) → XFonksiyonu (satır 5, koşullu)", text);
+
+        // koşulsuz çağrı sırasından öneri
+        Assert.Equal(["XFonksiyonu", "InitFlags"], report.SuggestInitOrder()!.Value.Order);
+        Assert.Contains("Önerilen çağrı sırası: XFonksiyonu,InitFlags", text);
     }
 
     [Fact]

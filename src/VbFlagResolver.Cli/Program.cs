@@ -19,7 +19,10 @@ internal static class Program
           --dry-run              Dosya yazmadan yalnızca rapor üret.
           --report <dosya>       Raporu dosyaya da yaz (UTF-8).
           --flag-mode <mod>      auto (varsayılan) | const | var
-          --init-proc <adlar>    Değişken bayraklara değer veren yordam(lar), virgülle. Varsayılan: modüldeki tüm yordamlar.
+          --init-proc <adlar>    Değişken bayraklara değer veren yordamlar, exe açılırken ÇAĞRILDIKLARI SIRAYLA, virgülle
+                                 (ör. XFonksiyonu,InitFlags). Aynı bayrakta son atama geçerli olur.
+                                 Varsayılan: modüldeki tüm yordamlar; birbirini çağırmayan yordamlar aynı bayrağa farklı
+                                 değer veriyorsa bayrak Bilinmiyor sayılır. Yordamların projede çağrıldığı yerler raporda.
           --unassigned-unknown   Hiç atanmamış Boolean değişken bayrağını False değil Bilinmiyor say.
           --ext <uzantılar>      İşlenecek uzantılar, virgülle. Varsayılan: .frm,.bas,.cls,.ctl,.dob,.pag
           --no-copy              Kaynak olmayan dosyaları (.frx, .vbp, ...) çıktıya kopyalama.

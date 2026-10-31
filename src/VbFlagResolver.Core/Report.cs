@@ -15,6 +15,10 @@ public enum ChangeKind
 
 public sealed record ChangeRecord(int Line, ChangeKind Kind, string Description);
 
+/// <summary>Bayrak modülündeki bir yordamın proje içinde çağrıldığı yer.</summary>
+/// <param name="Conditional">Çağrı If/Select/döngü içinde mi?</param>
+public sealed record ProcedureCall(string File, int Line, string Caller, string Procedure, bool Conditional, string Text);
+
 public sealed class FileReport
 {
     public required string RelativePath { get; init; }
@@ -23,6 +27,9 @@ public sealed class FileReport
     public bool Changed { get; set; }
     public bool Failed { get; set; }
     public int RemovedLines { get; set; }
+    /// <summary>Önizleme (fark gösterimi) için orijinal ve üretilen içerik.</summary>
+    public byte[]? OriginalBytes { get; set; }
+    public byte[]? OutputBytes { get; set; }
 
     public int Count(ChangeKind k) => Changes.Count(c => c.Kind == k);
 }
@@ -39,6 +46,9 @@ public sealed class Report
     public List<SourceNote> UnrecognizedFlagLines { get; } = [];
     /// <summary>Bayrağa atama / yerel bildirim nedeniyle Bilinmiyor sayılanlar.</summary>
     public List<SourceNote> FlagAssignments { get; } = [];
+    public List<FlagProcedure> FlagProcedures { get; } = [];
+    /// <summary>Bayrak yordamlarının projedeki çağrıları (kaynak sırasıyla).</summary>
+    public List<ProcedureCall> ProcedureCalls { get; } = [];
     public List<FileReport> Files { get; } = [];
     public List<string> CopiedFiles { get; } = [];
     public Dictionary<string, int> FlagUsage { get; } = new(StringComparer.OrdinalIgnoreCase);
@@ -68,6 +78,7 @@ public sealed class Report
         var unused = all.Where(f => !FlagUsage.ContainsKey(f.Name)).Select(f => f.Name).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
         if (unused.Count > 0)
             sb.AppendLine($"  Hiçbir kaynak dosyada kullanılmayan bayrak: {unused.Count} ({Abbrev(unused, 30)})");
+        AppendProcedures(sb);
         AppendNotes(sb, "Bayrak notları", FlagNotes);
         AppendNotes(sb, "Tanınmayan / atlanan satırlar (bayrak dosyası)", UnrecognizedFlagLines);
         AppendNotes(sb, "Bayrağa atama / yerel bildirim (Bilinmiyor sayıldı)", FlagAssignments);
@@ -102,6 +113,52 @@ public sealed class Report
     }
 
     private int Sum(ChangeKind k) => Files.Sum(f => f.Count(k));
+
+    /// <summary>Bayrak yordamları, çalıştırma kökleri ve projede çağrıldıkları yerler.</summary>
+    public void AppendProcedures(StringBuilder sb)
+    {
+        if (FlagProcedures.Count == 0) return;
+        sb.AppendLine($"Bayrak modülündeki yordamlar: {FlagProcedures.Count}");
+        foreach (var p in FlagProcedures)
+        {
+            var tags = new List<string>();
+            if (p.IsRoot) tags.Add("kök (çalıştırıldı)");
+            if (p.AssignsFlags) tags.Add("bayrak atıyor");
+            if (p.Calls.Count > 0) tags.Add("çağırdıkları: " + string.Join(", ", p.Calls));
+            sb.AppendLine($"  {p.Name} (satır {p.Line}){(tags.Count > 0 ? " — " + string.Join("; ", tags) : "")}");
+        }
+        if (ProcedureCalls.Count > 0)
+        {
+            sb.AppendLine("Projede çağrıldıkları yerler (çağrı sırasını belirlemek için):");
+            foreach (var g in ProcedureCalls.GroupBy(c => (c.File, c.Caller)))
+                sb.AppendLine($"  {g.Key.File}, {g.Key.Caller}: " +
+                              string.Join(" → ", g.Select(c => $"{c.Procedure} (satır {c.Line}{(c.Conditional ? ", koşullu" : "")})")));
+        }
+        if (SuggestInitOrder() is var (order, source))
+            sb.AppendLine($"Önerilen çağrı sırası: {string.Join(",", order)}  ({source} içindeki sıraya göre; --init-proc {string.Join(",", order)})");
+    }
+
+    /// <summary>
+    /// Birbirini çağırmayan, bayrak atayan yordamların tamamını koşulsuz çağıran tek bir yer varsa oradaki sırayı önerir
+    /// (ör. Sub Main: VarsayilanlariYukle → InitFlags). Farklı yerler farklı sıra veriyorsa öneri yapılmaz.
+    /// </summary>
+    public (List<string> Order, string Source)? SuggestInitOrder()
+    {
+        var calledInside = new HashSet<string>(FlagProcedures.SelectMany(p => p.Calls), StringComparer.OrdinalIgnoreCase);
+        var targets = FlagProcedures.Where(p => p.AssignsFlags && !calledInside.Contains(p.Name))
+            .Select(p => p.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (targets.Count < 2) return null;
+
+        var candidates = new List<(List<string> Order, string Source)>();
+        foreach (var g in ProcedureCalls.Where(c => !c.Conditional).GroupBy(c => (c.File, c.Caller)))
+        {
+            var seq = g.Select(c => c.Procedure).Where(targets.Contains)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            if (seq.Count == targets.Count) candidates.Add((seq, $"{g.Key.File}, {g.Key.Caller}"));
+        }
+        var distinct = candidates.Select(c => string.Join(",", c.Order).ToLowerInvariant()).Distinct().Count();
+        return distinct == 1 ? candidates[0] : null;
+    }
 
     private static string Abbrev(List<string> items, int max)
         => string.Join(", ", items.Take(max)) + (items.Count > max ? ", ..." : "");

@@ -66,9 +66,14 @@ public static class ProjectProcessor
 
         var moduleNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { flagResult.ModuleName };
 
-        // 3) bayrağa atama / gölgeleme taraması
+        // 3) bayrağa atama / gölgeleme taraması; bayrak yordamlarının çağrıldığı yerler
+        report.FlagProcedures.AddRange(flagResult.Procedures);
+        var procNames = new HashSet<string>(flagResult.Procedures.Select(p => p.Name), StringComparer.OrdinalIgnoreCase);
         foreach (var (rel, file) in sources)
+        {
             ScanAssignments(file, rel, flagResult.Flags, moduleNames, report);
+            if (procNames.Count > 0) report.ProcedureCalls.AddRange(ScanProcedureCalls(file, rel, procNames, moduleNames));
+        }
 
         // 4) dönüşüm
         var outputs = new List<(string Rel, byte[] Bytes)>();
@@ -76,6 +81,8 @@ public static class ProjectProcessor
         foreach (var (rel, file) in sources)
         {
             var r = rewriter.Rewrite(file, rel);
+            r.Report.OriginalBytes = file.OriginalBytes;
+            r.Report.OutputBytes = r.Output;
             report.Files.Add(r.Report);
             foreach (var name in r.FlagReferences)
                 report.FlagUsage[name] = report.FlagUsage.GetValueOrDefault(name) + 1;
@@ -161,6 +168,57 @@ public static class ProjectProcessor
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Bayrak modülündeki yordamların (InitFlags vb.) bu dosyada çağrıldığı yerler. Blok (If/Select/döngü)
+    /// içindeki veya tek satırlık If'teki çağrılar koşullu işaretlenir.
+    /// </summary>
+    public static List<ProcedureCall> ScanProcedureCalls(VbSourceFile file, string rel, ISet<string> procNames, ISet<string> moduleNames)
+    {
+        var calls = new List<ProcedureCall>();
+        string caller = "(modül)";
+        int depth = 0;
+        foreach (var line in file.GetLogicalLines())
+        {
+            var toks = line.Tokens;
+            int n = toks.Count - (Lexer.Comment(toks) != null ? 1 : 0);
+            if (n == 0) continue;
+
+            // yordam başı / sonu
+            int k = 0;
+            while (k < n && DeclWords.Any(toks[k].Is) || k < n && toks[k].Is("Friend")) k++;
+            if (k < n && (toks[k].Is("Sub") || toks[k].Is("Function") || toks[k].Is("Property")))
+            {
+                int nameIdx = toks[k].Is("Property") ? k + 2 : k + 1;
+                caller = $"{toks[k].Text} {(nameIdx < n ? toks[nameIdx].Text : "?")}";
+                depth = 0;
+                continue;
+            }
+
+            bool singleIf = false;
+            var first = toks[toks[0].Kind == TokenKind.Number ? Math.Min(1, n - 1) : 0];
+            if (first.Is("If"))
+            {
+                int then = toks.FindIndex(t => t.Is("Then"));
+                singleIf = then >= 0 && then < n - 1;
+            }
+            foreach (int s0 in StatementStarts(toks, n))
+            {
+                int s = s0;
+                if (s < n && toks[s].Is("Call")) s++;
+                if (s + 2 < n && moduleNames.Contains(toks[s].Text) && toks[s + 1].Text == ".") s += 2;
+                if (s < n && toks[s].Kind == TokenKind.Identifier && procNames.Contains(toks[s].Text)
+                    && !(s + 1 < n && toks[s + 1].Text == "="))
+                    calls.Add(new ProcedureCall(rel, line.LineNumber, caller, toks[s].Text, depth > 0 || singleIf, line.Text.Trim()));
+            }
+
+            // blok derinliği
+            if (first.Is("End") && n > 1 && (toks[1].Is("Sub") || toks[1].Is("Function") || toks[1].Is("Property"))) { caller = "(modül)"; depth = 0; }
+            else if (first.Is("End") || first.Is("Next") || first.Is("Loop") || first.Is("Wend")) depth = Math.Max(0, depth - 1);
+            else if ((first.Is("If") && !singleIf) || first.Is("Select") || first.Is("For") || first.Is("Do") || first.Is("While") || first.Is("With")) depth++;
+        }
+        return calls;
     }
 
     /// <summary>İfade başlangıç token indeksleri: satır başı/etiket sonrası, ':' sonrası, Then/Else sonrası.</summary>
