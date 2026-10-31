@@ -24,6 +24,9 @@ internal static class Program
                                  Varsayılan: modüldeki tüm yordamlar; birbirini çağırmayan yordamlar aynı bayrağa farklı
                                  değer veriyorsa bayrak Bilinmiyor sayılır. Yordamların projede çağrıldığı yerler raporda.
           --unassigned-unknown   Hiç atanmamış Boolean değişken bayrağını False değil Bilinmiyor say.
+          --define <sabitler>    #If için derleme sabitleri, ör. DEBUG_MODE=0,YENI=1. .vbp'deki CondComp değerlerini ezer
+                                 (dosya içindeki #Const satırları o dosyada yine geçerlidir).
+          --no-directives        #If gruplarını çözme; #If içindeki bayrak tanımları/atamaları Bilinmiyor sayılır.
           --ext <uzantılar>      İşlenecek uzantılar, virgülle. Varsayılan: .frm,.bas,.cls,.ctl,.dob,.pag
           --no-copy              Kaynak olmayan dosyaları (.frx, .vbp, ...) çıktıya kopyalama.
           --codepage <n>         Kaynak kod sayfası. Varsayılan: 1254
@@ -36,8 +39,8 @@ internal static class Program
     {
         try { Console.OutputEncoding = Encoding.UTF8; } catch { /* yönlendirilmiş çıktı */ }
 
-        string? flags = null, src = null, outDir = null, reportPath = null;
-        bool dryRun = false, noCopy = false, unassignedUnknown = false;
+        string? flags = null, src = null, outDir = null, reportPath = null, defines = null;
+        bool dryRun = false, noCopy = false, unassignedUnknown = false, noDirectives = false;
         var mode = FlagReadMode.Auto;
         string[]? initProcs = null;
         string[]? exts = null;
@@ -58,6 +61,8 @@ internal static class Program
                     case "--dry-run": dryRun = true; break;
                     case "--no-copy": noCopy = true; break;
                     case "--unassigned-unknown": unassignedUnknown = true; break;
+                    case "--define": defines = defines == null ? Next() : defines + "," + Next(); break;
+                    case "--no-directives": noDirectives = true; break;
                     case "--flag-mode":
                         mode = Next().ToLowerInvariant() switch
                         {
@@ -97,6 +102,8 @@ internal static class Program
                 DryRun = dryRun,
                 CopyOtherFiles = !noCopy,
                 CodePage = codePage,
+                Defines = defines,
+                ResolveDirectives = !noDirectives,
                 FlagOptions = new FlagReaderOptions { Mode = mode, InitProcedures = initProcs, UnassignedVariableIsFalse = !unassignedUnknown },
                 Extensions = exts ?? new ProcessOptions { FlagsPath = "", SourceDir = "" }.Extensions,
             };

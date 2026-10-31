@@ -12,6 +12,10 @@ public sealed class ProcessOptions
     /// <summary>Kaynak olmayan dosyaları (.frx, .vbp, ...) da çıktıya kopyala.</summary>
     public bool CopyOtherFiles { get; init; } = true;
     public int CodePage { get; init; } = 1254;
+    /// <summary>Kullanıcının verdiği derleme sabitleri ("DEBUG_MODE=0, X=1"); .vbp CondComp değerlerini ezer.</summary>
+    public string? Defines { get; init; }
+    /// <summary>#If gruplarını derleme sabitlerine göre çöz.</summary>
+    public bool ResolveDirectives { get; init; } = true;
 }
 
 /// <summary>Bayrakları okur, tüm kaynakları tarar, dönüştürür ve (kuru çalıştırma değilse) çıktıyı yazar.</summary>
@@ -34,6 +38,13 @@ public static class ProjectProcessor
 
         var report = new Report { FlagsFile = flagsPath, SourceDir = src, OutputDir = outDir, DryRun = o.DryRun };
 
+        // 0) koşullu derleme sabitleri: .vbp CondComp + kullanıcı
+        var constNotes = new List<SourceNote>();
+        var consts = CondConstants.FromProject(src, o.Defines, constNotes, o.CodePage);
+        report.Constants = consts;
+        report.ResolveDirectives = o.ResolveDirectives;
+        report.FlagNotes.AddRange(constNotes);
+
         // 1) bayraklar
         var flagOptions = new FlagReaderOptions
         {
@@ -41,6 +52,8 @@ public static class ProjectProcessor
             InitProcedures = o.FlagOptions.InitProcedures,
             UnassignedVariableIsFalse = o.FlagOptions.UnassignedVariableIsFalse,
             CodePage = o.CodePage,
+            Constants = consts,
+            ResolveDirectives = o.ResolveDirectives,
         };
         var flagResult = FlagReader.Read(flagsPath, flagOptions);
         report.Flags = flagResult.Flags;
@@ -71,13 +84,15 @@ public static class ProjectProcessor
         var procNames = new HashSet<string>(flagResult.Procedures.Select(p => p.Name), StringComparer.OrdinalIgnoreCase);
         foreach (var (rel, file) in sources)
         {
-            ScanAssignments(file, rel, flagResult.Flags, moduleNames, report);
-            if (procNames.Count > 0) report.ProcedureCalls.AddRange(ScanProcedureCalls(file, rel, procNames, moduleNames));
+            // yalnızca derlenen satırlar: derlenmeyen #If dalındaki atama bayrağı Bilinmiyor yapmamalı
+            var active = DirectiveResolver.Resolve(file.GetLogicalLines(), consts, o.ResolveDirectives, rel).Kept;
+            ScanAssignments(file, rel, flagResult.Flags, moduleNames, report, active);
+            if (procNames.Count > 0) report.ProcedureCalls.AddRange(ScanProcedureCalls(file, rel, procNames, moduleNames, active));
         }
 
         // 4) dönüşüm
         var outputs = new List<(string Rel, byte[] Bytes)>();
-        var rewriter = new Rewriter(flagResult.Flags, moduleNames);
+        var rewriter = new Rewriter(flagResult.Flags, moduleNames, consts, o.ResolveDirectives);
         foreach (var (rel, file) in sources)
         {
             var r = rewriter.Rewrite(file, rel);
@@ -127,9 +142,10 @@ public static class ProjectProcessor
     /// <summary>
     /// Bayrağa atama (FlagX = ...) veya aynı isimde yerel bildirim varsa bayrağı Bilinmiyor yapar ve raporlar.
     /// </summary>
-    public static void ScanAssignments(VbSourceFile file, string rel, FlagTable flags, ISet<string> moduleNames, Report report)
+    public static void ScanAssignments(VbSourceFile file, string rel, FlagTable flags, ISet<string> moduleNames, Report report,
+        IReadOnlyList<LogicalLine>? lines = null)
     {
-        foreach (var line in file.GetLogicalLines())
+        foreach (var line in lines ?? file.GetLogicalLines())
         {
             var toks = line.Tokens;
             int n = toks.Count - (Lexer.Comment(toks) != null ? 1 : 0);
@@ -174,12 +190,13 @@ public static class ProjectProcessor
     /// Bayrak modülündeki yordamların (InitFlags vb.) bu dosyada çağrıldığı yerler. Blok (If/Select/döngü)
     /// içindeki veya tek satırlık If'teki çağrılar koşullu işaretlenir.
     /// </summary>
-    public static List<ProcedureCall> ScanProcedureCalls(VbSourceFile file, string rel, ISet<string> procNames, ISet<string> moduleNames)
+    public static List<ProcedureCall> ScanProcedureCalls(VbSourceFile file, string rel, ISet<string> procNames, ISet<string> moduleNames,
+        IReadOnlyList<LogicalLine>? lines = null)
     {
         var calls = new List<ProcedureCall>();
         string caller = "(modül)";
         int depth = 0;
-        foreach (var line in file.GetLogicalLines())
+        foreach (var line in lines ?? file.GetLogicalLines())
         {
             var toks = line.Tokens;
             int n = toks.Count - (Lexer.Comment(toks) != null ? 1 : 0);

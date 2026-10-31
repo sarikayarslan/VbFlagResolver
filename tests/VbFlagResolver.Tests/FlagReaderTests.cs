@@ -299,6 +299,55 @@ public class FlagReaderTests
         Assert.True(Value(r, "gbC"));
     }
 
+    private const string DirectiveFlags = """
+        #If DEBUG_MODE Then
+        Public Const FLAG_D = True
+        #Else
+        Public Const FLAG_D = False
+        #End If
+        Public gbX As Boolean
+        Sub InitFlags()
+        #If DEBUG_MODE Then
+            gbX = True
+        #Else
+            gbX = False
+        #End If
+        End Sub
+        """;
+
+    private static CondConstants Defines(string spec)
+    {
+        var c = new CondConstants();
+        foreach (var (n, v) in CondConstants.ParseList(spec)) c.Set(n, v, "test");
+        return c;
+    }
+
+    [Theory]
+    [InlineData("DEBUG_MODE=1", true)]
+    [InlineData("DEBUG_MODE=0", false)]
+    public void Flags_inside_directives_follow_compiled_branch(string defines, bool expected)
+    {
+        var r = ReadText(DirectiveFlags, new FlagReaderOptions { Constants = Defines(defines) });
+        Assert.Equal(expected, Value(r, "FLAG_D"));
+        Assert.Equal(expected, Value(r, "gbX"));
+        Assert.DoesNotContain(r.Notes, n => n.Message.Contains("birden çok kez"));
+    }
+
+    [Fact]
+    public void Flags_inside_unresolved_directives_are_unknown()
+    {
+        var r = ReadText(DirectiveFlags); // sabit yok → DEBUG_MODE tanımsız
+        Assert.Null(Value(r, "FLAG_D"));
+        Assert.Null(Value(r, "gbX"));
+        Assert.Contains("#If DEBUG_MODE içinde tanımlı", r.Flags.Get("FLAG_D")!.UnknownReason);
+        Assert.Contains("#If DEBUG_MODE içinde atanıyor", r.Flags.Get("gbX")!.UnknownReason);
+
+        // çözme kapalıyken de aynı güvenli sonuç
+        var off = ReadText(DirectiveFlags, new FlagReaderOptions { Constants = Defines("DEBUG_MODE=1"), ResolveDirectives = false });
+        Assert.Null(Value(off, "FLAG_D"));
+        Assert.Null(Value(off, "gbX"));
+    }
+
     [Fact]
     public void Assignment_outside_procedure_makes_flag_unknown()
     {

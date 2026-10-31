@@ -24,6 +24,10 @@ internal sealed class MainForm : Form
     private readonly RadioButton _rbUnassignedFalse = new() { Text = "False say (VB'nin başlangıç değeri) — bağlı bloklar sadeleşir", AutoSize = true, Checked = true };
     private readonly RadioButton _rbUnassignedUnknown = new() { Text = "Bilinmiyor say — bağlı bloklara dokunulmaz", AutoSize = true };
     private readonly CheckBox _chkCopy = new() { Text = "Diğer dosyaları (.frx, .vbp...) kopyala", AutoSize = true };
+    private readonly CheckBox _chkDirectives = new() { Text = "#If bloklarını çöz", AutoSize = true, Checked = true };
+    private readonly TextBox _txtDefines = new() { Width = 300, PlaceholderText = ".vbp'deki CondComp kullanılır; değiştirmek için ör. DEBUG_MODE=0" };
+    /// <summary>Bayrak dosyası okunurken kullanılan derleme sabitleri (önizlemeden bağımsız görünüm için).</summary>
+    private CondConstants? _flagConsts;
 
     // komutlar
     private readonly Button _btnPreview = new() { Text = "Önizle (kuru çalıştırma)  F5", AutoSize = true, Padding = new Padding(6, 2, 6, 2) };
@@ -96,6 +100,15 @@ internal sealed class MainForm : Form
             "Başka dosyada 'gbX = ...' ataması olan bayraklar bu seçimden bağımsız olarak her zaman Bilinmiyor sayılır.";
         _toolTip.SetToolTip(_rbUnassignedFalse, unassignedHelp + "\n\nFalse: VB'de Boolean değişken False ile başlar; 'If gbX Then' blokları silinir, Else kısmı kalır.");
         _toolTip.SetToolTip(_rbUnassignedUnknown, unassignedHelp + "\n\nBilinmiyor: değerin başka bir yoldan (ör. ByRef parametre) verildiğinden şüpheleniyorsanız seçin; bu bayraklara bağlı bloklar olduğu gibi kalır.");
+        _toolTip.SetToolTip(_chkDirectives,
+            "İşaretli: #If / #ElseIf / #Else / #End If grupları derleme sabitlerine göre çözülür; VB'nin derleyeceği dal kalır,\n" +
+            "diğer dallar ve #If satırları silinir. Değeri bilinmeyen sabit içeren grup olduğu gibi bırakılır ve raporlanır.\n" +
+            "Boş: #If'lere dokunulmaz; bayrak dosyasında #If içindeki tanım/atamalar Bilinmiyor sayılır.");
+        _toolTip.SetToolTip(_txtDefines,
+            "Boş bırakılırsa kaynak klasördeki .vbp dosyasının CondComp satırı kullanılır (VB'deki Proje Özellikleri > Make > Conditional Compilation).\n" +
+            "Farklı bir derleme için değer verin, ör. DEBUG_MODE=0, YENI_EKRAN=1 — .vbp değerlerini ezer.\n" +
+            "Dosya içindeki #Const satırları o dosyada yine geçerlidir (VB'deki gibi).\n" +
+            "Kullanılan değerler Bayraklar > Yordamlar ve notlar bölümünde ve raporda görünür.");
         LoadSettings();
         _autoPreview = ApplyArgs(args);
         SuggestFromSource();
@@ -148,7 +161,7 @@ internal sealed class MainForm : Form
         var line2 = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
         line2.Controls.AddRange([Lbl("Hiç değer atanmamış Boolean değişken:"), _rbUnassignedFalse, _rbUnassignedUnknown]);
         var line3 = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(8, 0, 0, 0) };
-        line3.Controls.Add(_chkCopy);
+        line3.Controls.AddRange([_chkDirectives, Lbl("Derleme sabitleri:"), _txtDefines, Spacer(16), _chkCopy]);
         var opts = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1 };
         opts.Controls.Add(line1, 0, 0);
         opts.Controls.Add(line2, 0, 1);
@@ -207,6 +220,7 @@ internal sealed class MainForm : Form
         AddColumn(_lvFiles, "Tek satır", 60, HorizontalAlignment.Right);
         AddColumn(_lvFiles, "Satır −", 52, HorizontalAlignment.Right);
         AddColumn(_lvFiles, "Uyarı", 46, HorizontalAlignment.Right);
+        AddColumn(_lvFiles, "#If", 40, HorizontalAlignment.Right);
 
         AddColumn(_lvDetails, "Satır", 60, HorizontalAlignment.Right);
         AddColumn(_lvDetails, "Tür", 110);
@@ -332,6 +346,9 @@ internal sealed class MainForm : Form
         _txtInit.TextChanged += (_, _) => ScheduleFlagRead();
         _rbUnassignedUnknown.CheckedChanged += (_, _) => ScheduleFlagRead(); // iki yönde de tetiklenir
         _numCodePage.ValueChanged += (_, _) => ScheduleFlagRead();
+        _txtDefines.TextChanged += (_, _) => ScheduleFlagRead();
+        _chkDirectives.CheckedChanged += (_, _) => { _txtDefines.Enabled = _chkDirectives.Checked; ScheduleFlagRead(); };
+        _txtSrc.TextChanged += (_, _) => { if (File.Exists(_txtFlags.Text.Trim())) ScheduleFlagRead(); }; // .vbp sabitleri kaynaktan gelir
         _flagReadTimer.Tick += (_, _) =>
         {
             ReadFlagsNow(showTab: flagFileChanged);
@@ -416,6 +433,8 @@ internal sealed class MainForm : Form
             OutputDir = _txtOut.Text.Trim().Length > 0 ? _txtOut.Text.Trim() : null,
             DryRun = dryRun,
             CopyOtherFiles = _chkCopy.Checked,
+            Defines = _txtDefines.Text.Trim().Length > 0 ? _txtDefines.Text.Trim() : null,
+            ResolveDirectives = _chkDirectives.Checked,
             CodePage = (int)_numCodePage.Value,
             Extensions = exts.Length > 0 ? exts : new ProcessOptions { FlagsPath = "", SourceDir = "" }.Extensions,
             FlagOptions = new FlagReaderOptions
@@ -477,6 +496,9 @@ internal sealed class MainForm : Form
         _numCodePage.Value = defaults.CodePage;
         SetUnassignedUnknown(defaults.UnassignedUnknown);
         _chkCopy.Checked = defaults.CopyOtherFiles;
+        _txtDefines.Text = defaults.Defines;
+        _chkDirectives.Checked = defaults.ResolveDirectives;
+        _flagConsts = null;
         _cmbFlagValue.SelectedIndex = 0;
         _chkAllLines.Checked = false;
         _flagReadTimer.Stop(); // alan değişiklikleri okuma zamanlayıcısını başlatmış olabilir
@@ -527,7 +549,7 @@ internal sealed class MainForm : Form
                 f.RelativePath, state,
                 f.Count(ChangeKind.BlockRemoved).ToString(), f.Count(ChangeKind.BlockLifted).ToString(),
                 f.Count(ChangeKind.BlockSimplified).ToString(), f.Count(ChangeKind.SingleLineIf).ToString(),
-                f.RemovedLines.ToString(), f.Warnings.Count.ToString(),
+                f.RemovedLines.ToString(), f.Warnings.Count.ToString(), f.Count(ChangeKind.DirectiveResolved).ToString(),
             ]) { Tag = f };
             if (f.Failed) item.ForeColor = Color.Firebrick;
             else if (f.Changed) item.Font = new Font(_lvFiles.Font, FontStyle.Bold);
@@ -569,12 +591,19 @@ internal sealed class MainForm : Form
         }
         try
         {
-            var fo = BuildOptions(dryRun: true).FlagOptions;
+            var po = BuildOptions(dryRun: true);
+            var fo = po.FlagOptions;
+            // #If için sabitler: kaynak klasördeki .vbp (seçildiyse) + kullanıcının verdikleri
+            var src = _txtSrc.Text.Trim();
+            var constNotes = new List<SourceNote>();
+            _flagConsts = CondConstants.FromProject(Directory.Exists(src) ? src : null, po.Defines, constNotes, po.CodePage);
             _flagRead = FlagReader.Read(path, new FlagReaderOptions
             {
                 Mode = fo.Mode, InitProcedures = fo.InitProcedures,
                 UnassignedVariableIsFalse = fo.UnassignedVariableIsFalse, CodePage = (int)_numCodePage.Value,
+                Constants = _flagConsts, ResolveDirectives = po.ResolveDirectives,
             });
+            _flagRead.Notes.InsertRange(0, constNotes);
         }
         catch (Exception ex)
         {
@@ -622,6 +651,10 @@ internal sealed class MainForm : Form
         tmp.FlagProcedures.AddRange(v.Procedures);
         if (v.Calls != null) tmp.ProcedureCalls.AddRange(v.Calls);
         tmp.AppendProcedures(sb);
+        sb.AppendLine();
+        tmp.Constants = _reportIsCurrent && _report != null ? _report.Constants : _flagConsts ?? new CondConstants();
+        tmp.ResolveDirectives = _chkDirectives.Checked;
+        tmp.AppendConstants(sb);
         if (v.Calls == null) sb.AppendLine("Projede çağrıldıkları yerler: Önizle'ye basınca görünür.");
         else if (v.Calls.Count == 0) sb.AppendLine("Projede çağrıldıkları yer bulunamadı.");
         if (v.Notes.Count > 0)
@@ -773,6 +806,7 @@ internal sealed class MainForm : Form
         ChangeKind.BlockRemoved => "Blok silindi",
         ChangeKind.BlockLifted => "Blok açıldı",
         ChangeKind.BlockSimplified => "Sadeleşti",
+        ChangeKind.DirectiveResolved => "#If çözüldü",
         _ => "Tek satır If",
     };
 
@@ -808,6 +842,9 @@ internal sealed class MainForm : Form
         _numCodePage.Value = Math.Clamp(_settings.CodePage, (int)_numCodePage.Minimum, (int)_numCodePage.Maximum);
         SetUnassignedUnknown(_settings.UnassignedUnknown);
         _chkCopy.Checked = _settings.CopyOtherFiles;
+        _txtDefines.Text = _settings.Defines;
+        _chkDirectives.Checked = _settings.ResolveDirectives;
+        _txtDefines.Enabled = _chkDirectives.Checked;
     }
 
     private void SetUnassignedUnknown(bool unknown)
@@ -827,6 +864,8 @@ internal sealed class MainForm : Form
         _settings.CodePage = (int)_numCodePage.Value;
         _settings.UnassignedUnknown = _rbUnassignedUnknown.Checked;
         _settings.CopyOtherFiles = _chkCopy.Checked;
+        _settings.Defines = _txtDefines.Text.Trim();
+        _settings.ResolveDirectives = _chkDirectives.Checked;
         _settings.Save();
     }
 

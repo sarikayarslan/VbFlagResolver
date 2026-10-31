@@ -13,6 +13,15 @@ public class CaseFileTests
         return data;
     }
 
+    /// <summary>#If testleri için derleme sabitleri (Cases/_defines.txt: DEBUG_MODE = 1, YENI = 0).</summary>
+    public static CondConstants CaseConstants()
+    {
+        var c = new CondConstants();
+        foreach (var (n, v) in CondConstants.ParseList(File.ReadAllText(Path.Combine(TestPaths.CasesDir, "_defines.txt"))))
+            c.Set(n, v, "_defines.txt");
+        return c;
+    }
+
     [Theory]
     [MemberData(nameof(Cases))]
     public void Input_produces_expected_output(string name)
@@ -21,11 +30,28 @@ public class CaseFileTests
         var input = VbSourceFile.Load(Path.Combine(TestPaths.CasesDir, name + ".input.bas"));
         var expected = File.ReadAllBytes(Path.Combine(TestPaths.CasesDir, name + ".expected.bas"));
 
-        var result = new Rewriter(flags, new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "mFlags" }).Rewrite(input);
+        var result = new Rewriter(flags, new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "mFlags" }, CaseConstants()).Rewrite(input);
 
         var enc = VbSourceFile.GetEncoding(1254);
         Assert.Equal(enc.GetString(expected), enc.GetString(result.Output));
         Assert.Equal(expected, result.Output);
+    }
+
+    [Fact]
+    public void Block_crossing_unresolved_directive_is_left_with_warning()
+    {
+        var input = VbSourceFile.Load(Path.Combine(TestPaths.CasesDir, "27_directive_crossing_unchanged.input.bas"));
+        var result = new Rewriter(TestPaths.CaseFlags().Flags, null, CaseConstants()).Rewrite(input);
+        Assert.Contains(result.Report.Warnings, w => w.Message.Contains("kesişiyor"));
+        Assert.Contains(result.Report.Warnings, w => w.Message.Contains("TANIMSIZ"));
+    }
+
+    [Fact]
+    public void Directives_are_left_alone_when_resolution_is_off()
+    {
+        var input = VbSourceFile.Load(Path.Combine(TestPaths.CasesDir, "24_directive_resolve.input.bas"));
+        var result = new Rewriter(TestPaths.CaseFlags().Flags, null, CaseConstants(), resolveDirectives: false).Rewrite(input);
+        Assert.False(result.Changed);
     }
 
     [Fact]

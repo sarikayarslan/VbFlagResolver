@@ -142,6 +142,10 @@ public sealed class FlagReaderOptions
     /// <summary>Hiç atanmamış Boolean değişken bayrağı False (VB varsayılanı) say; false ise Bilinmiyor.</summary>
     public bool UnassignedVariableIsFalse { get; init; } = true;
     public int CodePage { get; init; } = 1254;
+    /// <summary>#If koşulları için derleme sabitleri (.vbp CondComp, kullanıcı). null: hiçbiri tanımlı değil.</summary>
+    public CondConstants? Constants { get; init; }
+    /// <summary>false: #If grupları çözülmez; içlerindeki tanım/atamalar Bilinmiyor sayılır.</summary>
+    public bool ResolveDirectives { get; init; } = true;
 }
 
 public sealed record SourceNote(string File, int Line, string Message, string? Text = null);
@@ -159,6 +163,8 @@ public sealed class FlagReadResult
     public List<SourceNote> Unrecognized { get; } = [];
     public List<SourceNote> Notes { get; } = [];
     public List<FlagProcedure> Procedures { get; } = [];
+    /// <summary>Bayrak dosyasındaki #If çözümlemesi.</summary>
+    public DirectiveResult? Directives { get; set; }
 }
 
 /// <summary>
@@ -189,11 +195,26 @@ public static class FlagReader
         ProcBody? currentProc = null;
         var moduleNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { file.ModuleName };
 
-        foreach (var line in file.GetLogicalLines())
+        // #If grupları önce çözülür: yalnızca derlenecek dal okunur
+        var dr = DirectiveResolver.Resolve(file.GetLogicalLines(), options.Constants ?? new CondConstants(), options.ResolveDirectives, fileName);
+        result.Directives = dr;
+        if (dr.Error != null)
+            result.Notes.Add(new SourceNote(fileName, dr.ErrorLine, $"#If yapısı çözümlenemedi ({dr.Error}); #If satırları yok sayıldı"));
+        result.Notes.AddRange(dr.Warnings);
+
+        foreach (var line in dr.Kept)
         {
             var tokens = line.Tokens;
             int lineNo = line.LineNumber;
             if (tokens.Count == 0 || tokens[0].Kind == TokenKind.Comment) continue;
+            // çözülemeyen bir #If grubunun içindeyse koşulun metni
+            string? directive = dr.ConditionText.GetValueOrDefault(line);
+            if (tokens[0].Kind == TokenKind.Directive)
+            {
+                if (tokens[0].Text.Equals("#Const", StringComparison.OrdinalIgnoreCase))
+                    result.Notes.Add(new SourceNote(fileName, lineNo, "Koşullu derleme sabiti", line.Text.Trim()));
+                continue;
+            }
 
             foreach (var stmt in Lexer.SplitStatements(tokens))
             {
@@ -225,7 +246,7 @@ public static class FlagReader
 
                 if (currentProc != null)
                 {
-                    currentProc.Statements.Add(new BufferedStmt(stmt, line.Text, lineNo));
+                    currentProc.Statements.Add(new BufferedStmt(stmt, line.Text, lineNo, directive));
                     continue;
                 }
 
@@ -271,6 +292,9 @@ public static class FlagReader
                         if (options.Mode == FlagReadMode.ConstOnly) { Unrecognized("Değişken atlandı (yalnızca sabit modu)"); continue; }
                         ReadVariable(decl, ctx, table, lineNo, Unrecognized);
                     }
+                    // çözülemeyen #If içindeki tanım: hangi dalın derlendiği bilinmiyor
+                    if (directive != null && decl.Count > 0 && table.Get(decl[0].Text) is { } declared)
+                        table.MarkUnknown(declared.Name, $"{fileName}:{lineNo} #If {directive} içinde tanımlı; koşul çözülemedi");
                 }
             }
         }
@@ -298,7 +322,8 @@ public static class FlagReader
     }
 
     /// <summary>Yordam gövdesindeki bir ifade (2. aşamada çalıştırılmak üzere saklanır).</summary>
-    private sealed record BufferedStmt(List<Token> Stmt, string Text, int LineNo);
+    /// <param name="Directive">Çözülemeyen bir #If içindeyse koşulun metni (ifade koşullu derlenir).</param>
+    private sealed record BufferedStmt(List<Token> Stmt, string Text, int LineNo, string? Directive);
 
     private sealed class ProcBody(string name, int line)
     {
@@ -437,7 +462,8 @@ public static class FlagReader
                 {
                     if (state.ExitedUnconditionally) break;
                     if (stack.Contains(c)) continue; // özyineleme: bir kez izlemek yeter
-                    Execute(ctx.Bodies[c], ctx, state.IsConditional || singleIf, new HashSet<string>(stack, StringComparer.OrdinalIgnoreCase) { c });
+                    Execute(ctx.Bodies[c], ctx, state.IsConditional || singleIf || st.Directive != null,
+                        new HashSet<string>(stack, StringComparer.OrdinalIgnoreCase) { c });
                 }
                 if (!singleIf) continue;
             }
@@ -447,7 +473,7 @@ public static class FlagReader
 
     private static void ReadProcedureStatement(BufferedStmt st, ProcState proc, ExecContext ctx)
     {
-        var (stmt, text, lineNo) = st;
+        var (stmt, text, lineNo, directive) = st;
         var table = ctx.Table;
         var result = ctx.Result;
         string fileName = ctx.FileName;
@@ -466,7 +492,7 @@ public static class FlagReader
         }
         if (first.Is("Exit") && stmt.Count > 1 && (stmt[1].Is("Sub") || stmt[1].Is("Function") || stmt[1].Is("Property")))
         {
-            if (proc.BlockDepth == 0) proc.ExitedUnconditionally = true;
+            if (proc.BlockDepth == 0 && directive == null) proc.ExitedUnconditionally = true;
             else proc.ExitedConditionally = true;
             return;
         }
@@ -496,9 +522,10 @@ public static class FlagReader
                 unrecognized($"Erişilemez atama (yukarıda Exit {proc.Name} var), dikkate alınmadı");
                 return;
             }
-            if (proc.IsConditional)
+            if (proc.IsConditional || directive != null)
             {
-                string reason = proc.BlockDepth > 0 ? $"{fileName}:{lineNo} koşullu/döngü içinde atanıyor"
+                string reason = directive != null ? $"{fileName}:{lineNo} #If {directive} içinde atanıyor; koşul çözülemedi"
+                    : proc.BlockDepth > 0 ? $"{fileName}:{lineNo} koşullu/döngü içinde atanıyor"
                     : proc.ExitedConditionally ? $"{fileName}:{lineNo} koşullu Exit'ten sonra atanıyor"
                     : $"{fileName}:{lineNo} koşullu çağrılan {proc.Name} içinde atanıyor";
                 bool wasClean = flag.UnknownReason == null;

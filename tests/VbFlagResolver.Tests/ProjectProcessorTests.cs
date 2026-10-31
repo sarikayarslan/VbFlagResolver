@@ -80,6 +80,33 @@ public class ProjectProcessorTests
         Assert.Contains("Önerilen çağrı sırası: XFonksiyonu,InitFlags", text);
     }
 
+    [Theory]
+    [InlineData(null, "    a = 1\r\n    If x Then\r\n        b = 1\r\n    End If\r\n")]       // .vbp: DEBUG_MODE = 0
+    [InlineData("DEBUG_MODE=1", "    gbX = False\r\n    If gbX Then\r\n        a = 1\r\n    End If\r\n    b = 1\r\n")] // kullanıcı ezer; atama derlenir → gbX Bilinmiyor
+    public void Uses_vbp_condcomp_and_user_defines(string? defines, string expectedBody)
+    {
+        var src = TestPaths.NewTempDir();
+        File.WriteAllText(Path.Combine(src, "Proje.vbp"), "Type=Exe\r\nCondComp=\"DEBUG_MODE = 0\"\r\n");
+        File.WriteAllText(Path.Combine(src, "mFlags.bas"), "Attribute VB_Name = \"mFlags\"\r\nPublic Const T1 = True\r\nPublic gbX As Boolean\r\nSub InitFlags()\r\n    gbX = True\r\nEnd Sub\r\n");
+        File.WriteAllText(Path.Combine(src, "modA.bas"),
+            "Sub A()\r\n" +
+            "#If DEBUG_MODE Then\r\n    gbX = False\r\n#End If\r\n" +              // derlenmeyen dalda atama
+            "    If gbX Then\r\n        a = 1\r\n    End If\r\n" +
+            "#If DEBUG_MODE Then\r\n    If T1 Then\r\n#Else\r\n    If T1 And x Then\r\n#End If\r\n" +
+            "        b = 1\r\n    End If\r\n" +
+            "End Sub\r\n");
+        var outDir = TestPaths.NewTempDir();
+        var report = ProjectProcessor.Run(new ProcessOptions
+        {
+            FlagsPath = Path.Combine(src, "mFlags.bas"), SourceDir = src, OutputDir = outDir, Defines = defines,
+        });
+
+        var text = File.ReadAllText(Path.Combine(outDir, "modA.bas"));
+        Assert.Equal("Sub A()\r\n" + expectedBody + "End Sub\r\n", text);
+        Assert.Equal(defines == null ? 0 : 1, report.Constants.All.Single().Value!.Value.Number);
+        Assert.Contains("Koşullu derleme sabitleri: 1", report.ToText());
+    }
+
     [Fact]
     public void Dry_run_writes_nothing()
     {

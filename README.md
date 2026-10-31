@@ -138,6 +138,8 @@ Tek dosyalık exe ilk açılışta kendini birkaç saniye içinde hazırlar; son
 | **Çağrı sırası** (`--init-proc`) | Değişkenlere değer veren yordamlar, exe açılırken çağrıldıkları sırayla, virgülle (ör. `VarsayilanlariYukle,InitFlags`). Aynı bayrağa birden çok yordam değer veriyorsa son çalışanın değeri geçerli olur. Listede olmayan ve listedekilerden çağrılmayan yordamlardaki atamalar bayrağı Bilinmiyor yapar. **Boş:** tüm yordamlar okunur; birbirini çağırmayan yordamlar aynı bayrağa farklı değer veriyorsa o bayrak Bilinmiyor kalır. | Bayraklar sekmesinde "hangisinin son çalıştığı bilinmiyor" görüldüğünde. Doğru sıra "Yordamlar ve notlar" bölümünde görünür; tek ve kesin bir sıra bulunursa **Projedeki çağrı sırasını kullan** düğmesi alanı doldurur. |
 | **Uzantılar** (`--ext`) | İçindeki If blokları işlenecek dosya türleri. Listede olmayan dosyalar işlenmez (kutu işaretliyse aynen kopyalanır). | Projede başka türde kod dosyası varsa eklenir (ör. `.dsr`), bazı türler işlenmek istenmiyorsa çıkarılır. |
 | **Kod sayfası** (`--codepage`) | Dosyaların karakter kodlaması. 1254 = Windows Türkçe (ğ, ş, ı, İ…). Dosyalar bu kodlamayla okunur ve yazılır; değişmeyen satırlar her durumda bayt bayt korunur. | Yalnızca kaynaklar başka kodlamayla kaydedilmişse (ör. 1252 Batı Avrupa). Yanlış değer Türkçe karakterlerin önizlemede bozuk görünmesine yol açar. |
+| **#If bloklarını çöz** (`--no-directives` kapatır) | **İşaretli (varsayılan):** `#If`/`#ElseIf`/`#Else`/`#End If` grupları derleme sabitlerine göre çözülür; VB'nin derleyeceği dal kalır, diğer dallar ve `#If` satırları silinir (bkz. "Koşullu derleme"). **Boş:** `#If`'lere dokunulmaz; bayrak dosyasında `#If` içindeki tanım/atamalar Bilinmiyor sayılır. | `#If`'lerin çıktıda olduğu gibi kalması isteniyorsa kapatılır (ör. farklı derleme yapılandırmaları korunacaksa). |
+| **Derleme sabitleri** (`--define`) | `#If` koşullarındaki sabitlerin değerleri, ör. `DEBUG_MODE=0, YENI_EKRAN=1`. **Boş:** kaynak klasördeki `.vbp` dosyasının `CondComp` satırı kullanılır (VB'de Proje Özellikleri → Make → Conditional Compilation Arguments). Verilen değerler `.vbp`'yi ezer. | Hangi derleme için temizlik yapılacaksa o değerler yazılır; ör. `.vbp`'de geliştirme ayarı (`DEBUG_MODE = 1`) kayıtlıysa ve sürüm (`0`) için temizlenecekse. Kullanılan değerler "Yordamlar ve notlar" bölümünde ve raporda görünür. |
 | **Hiç değer atanmamış Boolean değişken** (iki seçenekli; `--unassigned-unknown` = Bilinmiyor) | Yalnızca bayrak modülünde tanımlanıp hiçbir yordamda değer verilmeyen `gbX As Boolean` değişkenleri için; sabitleri ve değer atanmış değişkenleri etkilemez. **False say (varsayılan):** VB'de Boolean değişken False ile başlar; `If gbX Then` blokları silinir, `Else` kısmı kalır. **Bilinmiyor say:** bu bayraklara bağlı bloklar olduğu gibi kalır. | Değerin aracın göremediği bir yoldan verildiğinden şüpheleniliyorsa (ör. `ByRef` parametreyle başka yordamda değiştiriliyorsa). Diğer dosyalardaki doğrudan `gbX = ...` atamaları zaten yakalanır ve bayrağı her durumda Bilinmiyor yapar. |
 | **Diğer dosyaları (.frx, .vbp...) kopyala** (`--no-copy` kapatır) | Önizlemeye etkisi yoktur; yalnızca **Dönüştür ve çıktıya yaz** sırasında. **İşaretli (varsayılan):** işlenmeyen dosyalar da (`.frx` form resimleri, `.vbp` proje, `.res`, resimler ve **bayrak dosyasının kendisi**) çıktıya aynen kopyalanır; çıktı klasörü VB5'te doğrudan açılabilen eksiksiz bir proje olur. **Boş:** yalnızca işlenen kaynak dosyalar yazılır; `.frx` ve bayrak dosyası olmadan proje açılmaz, dosyaları elle bir proje kopyasının üzerine koymak gerekir. | Neredeyse her zaman işaretli bırakılır. Yalnızca değişen kaynak dosyalarını ayrıca görmek isteniyorsa kapatılır. |
 
@@ -171,6 +173,8 @@ VbFlagResolver.exe --flags C:\Proje\mDevelopmentFlags.bas --src C:\Proje --out C
 | `--ext .frm,.bas` | İşlenecek uzantılar. |
 | `--no-copy` | Kaynak olmayan dosyaları kopyalama. |
 | `--codepage 1254` | Kaynak kod sayfası. |
+| `--define A=0,B=1` | `#If` için derleme sabitleri; `.vbp` CondComp değerlerini ezer. |
+| `--no-directives` | `#If` gruplarını çözme. |
 
 ## Değişken bayraklar nasıl okunur?
 
@@ -187,6 +191,29 @@ gelir. Yordamlar metindeki sırayla değil, **çağrı sırasıyla** çalışmı
 - Yordam dışındaki atama (`End Sub`'dan sonra `gbX = False`) VB'de derlenmez: bayrak Bilinmiyor sayılır ve raporlanır.
 - Hiç atanmamış Boolean değişken VB varsayılanı olan False sayılır (`--unassigned-unknown` ile Bilinmiyor).
 
+## Koşullu derleme (#If)
+
+`#If` / `#ElseIf` / `#Else` / `#End If` grupları, bayraklardan **önce** çözülür; yani VB'nin derleyeceği kod üzerinde
+çalışılır. Sabitlerin değeri (öncelik sırasıyla, sonraki öncekini ezer):
+
+1. `.vbp` dosyasındaki `CondComp="DEBUG_MODE = 0 : YENI = 1"` satırı,
+2. arayüzde "Derleme sabitleri" alanı / `--define`,
+3. dosyanın içindeki `#Const` satırları — VB'deki gibi yalnızca o dosyada ve tanımlandığı yerden sonra geçerli.
+
+Sonuçlar:
+
+- Koşulu bilinen grup: derlenecek dalın içeriği kalır (girintisi değişmez), diğer dallar ve `#If` satırları silinir.
+  Hiçbir dal derlenmiyorsa grup tamamen silinir.
+- `#If`/`#Else` içinde iki farklı If başlığı olup gövde ve `End If` ortaksa, önce `#If` çözüldüğü için geriye tek başlık
+  kalır ve If normal işlenir.
+- Bayrak dosyasında `#If` içindeki tanım ve atamalar da derlenecek dala göre okunur.
+- Değeri bilinmeyen (tanımsız) sabit içeren grup **olduğu gibi** bırakılır, uyarı verilir; içindeki bayrak If'leri
+  yine işlenir. Bayrak dosyasında böyle bir grubun içindeki tanım/atama Bilinmiyor sayılır.
+  (VB tanımsız sabiti 0 kabul eder; araç bunu varsaymaz. Gerekirse değeri "Derleme sabitleri"ne yazın.)
+- Silinecek bir If dalı çözülemeyen bir `#If`/`#End If` ile kesişiyorsa (biri silinip diğeri kalacaksa) o If bloğu
+  değiştirilmez ve uyarı verilir; derlenmeyen kod üretilmez.
+- Hangi dalın kaldığı raporda (`#If DEBUG_MODE → #Else dalı kaldı`) ve arayüzde dosya listesinin `#If` sütununda görünür.
+
 ## Rapor içeriği
 
 - Okunan bayrak sayısı (True/False/Bilinmiyor), Bilinmiyor olanlar ve nedeni, hiç kullanılmayan bayraklar
@@ -199,7 +226,6 @@ gelir. Yordamlar metindeki sırayla değil, **çağrı sırasıyla** çalışmı
 
 ## Bilinen sınırlar
 
-- `#If`/`#Const` koşullu derleme henüz işlenmiyor (ikinci aşama).
 - İç içe tek satırlık If (`If A Then If B Then ...`) değiştirilmez, uyarı verilir.
 - Değiştirilen başlık satırı satır devamı (` _`) içeriyorsa tek satıra birleştirilir.
 - Etiket veya `:` ile ek ifade içeren `If/Else/End If` satırlarının bulunduğu bloklar olduğu gibi bırakılır (uyarı verilir).

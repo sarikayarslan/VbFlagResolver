@@ -11,6 +11,8 @@ public enum ChangeKind
     /// <summary>Blok korundu; dallar silindi ve/veya koşullar sadeleşti.</summary>
     BlockSimplified,
     SingleLineIf,
+    /// <summary>#If grubu derleme sabitlerine göre çözüldü.</summary>
+    DirectiveResolved,
 }
 
 public sealed record ChangeRecord(int Line, ChangeKind Kind, string Description);
@@ -46,6 +48,9 @@ public sealed class Report
     public List<SourceNote> UnrecognizedFlagLines { get; } = [];
     /// <summary>Bayrağa atama / yerel bildirim nedeniyle Bilinmiyor sayılanlar.</summary>
     public List<SourceNote> FlagAssignments { get; } = [];
+    /// <summary>Proje derleme sabitleri (.vbp CondComp + kullanıcı).</summary>
+    public CondConstants Constants { get; set; } = new();
+    public bool ResolveDirectives { get; set; } = true;
     public List<FlagProcedure> FlagProcedures { get; } = [];
     /// <summary>Bayrak yordamlarının projedeki çağrıları (kaynak sırasıyla).</summary>
     public List<ProcedureCall> ProcedureCalls { get; } = [];
@@ -79,6 +84,7 @@ public sealed class Report
         if (unused.Count > 0)
             sb.AppendLine($"  Hiçbir kaynak dosyada kullanılmayan bayrak: {unused.Count} ({Abbrev(unused, 30)})");
         AppendProcedures(sb);
+        AppendConstants(sb);
         AppendNotes(sb, "Bayrak notları", FlagNotes);
         AppendNotes(sb, "Tanınmayan / atlanan satırlar (bayrak dosyası)", UnrecognizedFlagLines);
         AppendNotes(sb, "Bayrağa atama / yerel bildirim (Bilinmiyor sayıldı)", FlagAssignments);
@@ -90,6 +96,7 @@ public sealed class Report
         sb.AppendLine($"İşlenen dosya : {Files.Count}  (değişecek: {changed.Count}, hatalı: {Files.Count(f => f.Failed)})");
         sb.AppendLine($"Toplam        : {Sum(ChangeKind.BlockRemoved)} blok silindi, {Sum(ChangeKind.BlockLifted)} blok açıldı, " +
                       $"{Sum(ChangeKind.BlockSimplified)} blok sadeleşti, {Sum(ChangeKind.SingleLineIf)} tek satırlık If, " +
+                      $"{Sum(ChangeKind.DirectiveResolved)} #If çözüldü, " +
                       $"{Files.Sum(f => f.RemovedLines)} satır azaldı");
         sb.AppendLine();
         foreach (var f in Files.OrderBy(f => f.RelativePath, StringComparer.OrdinalIgnoreCase))
@@ -98,7 +105,8 @@ public sealed class Report
             sb.AppendLine($"[{f.RelativePath}]{(f.Failed ? " HATA - dosya değiştirilmeden kopyalandı" : "")}");
             if (f.Changed)
                 sb.AppendLine($"  {f.Count(ChangeKind.BlockRemoved)} silindi, {f.Count(ChangeKind.BlockLifted)} açıldı, " +
-                              $"{f.Count(ChangeKind.BlockSimplified)} sadeleşti, {f.Count(ChangeKind.SingleLineIf)} tek satır, {f.RemovedLines} satır azaldı");
+                              $"{f.Count(ChangeKind.BlockSimplified)} sadeleşti, {f.Count(ChangeKind.SingleLineIf)} tek satır, " +
+                              $"{f.Count(ChangeKind.DirectiveResolved)} #If, {f.RemovedLines} satır azaldı");
             foreach (var c in f.Changes)
                 sb.AppendLine($"    satır {c.Line,5}: {c.Description}");
             foreach (var w in f.Warnings)
@@ -113,6 +121,24 @@ public sealed class Report
     }
 
     private int Sum(ChangeKind k) => Files.Sum(f => f.Count(k));
+
+    /// <summary>#If koşullarında kullanılan proje sabitleri ve kaynakları.</summary>
+    public void AppendConstants(StringBuilder sb)
+    {
+        if (!ResolveDirectives)
+        {
+            sb.AppendLine("Koşullu derleme (#If): çözülmüyor (kapalı); #If içindeki bayrak tanımları/atamaları Bilinmiyor sayılır");
+            return;
+        }
+        if (Constants.Count == 0)
+        {
+            sb.AppendLine("Koşullu derleme sabitleri: yok (.vbp'de CondComp bulunamadı). Tanımsız sabit içeren #If grupları olduğu gibi bırakılır.");
+            return;
+        }
+        sb.AppendLine($"Koşullu derleme sabitleri: {Constants.Count}");
+        foreach (var (name, value, source) in Constants.All)
+            sb.AppendLine($"  {name} = {(value is { } v ? v.ToString() : "bilinmiyor")}  ({source})");
+    }
 
     /// <summary>Bayrak yordamları, çalıştırma kökleri ve projede çağrıldıkları yerler.</summary>
     public void AppendProcedures(StringBuilder sb)

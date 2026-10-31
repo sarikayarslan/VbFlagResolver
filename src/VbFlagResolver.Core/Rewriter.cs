@@ -24,11 +24,16 @@ public sealed class Rewriter
     private bool _changed;
     private readonly List<(string Name, int Line, string What)> _removedDecls = [];
 
-    public Rewriter(FlagTable flags, ISet<string>? moduleNames = null)
+    private readonly CondConstants _constants;
+    private readonly bool _resolveDirectives;
+
+    public Rewriter(FlagTable flags, ISet<string>? moduleNames = null, CondConstants? constants = null, bool resolveDirectives = true)
     {
         _flags = flags;
         _moduleNames = moduleNames ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         _simplifier = new Simplifier(flags);
+        _constants = constants ?? new CondConstants();
+        _resolveDirectives = resolveDirectives;
     }
 
     public RewriteResult Rewrite(VbSourceFile file, string? relativePath = null)
@@ -45,14 +50,23 @@ public sealed class Rewriter
             if (t.Kind == TokenKind.Identifier && _flags.IsFlag(t.Text))
                 refs.Add(_flags.Get(t.Text)!.Name);
 
+        // önce #If grupları çözülür; kalan satırlar normal If işlemine girer
+        var dr = DirectiveResolver.Resolve(logical, _constants, _resolveDirectives, _report.RelativePath);
+        if (dr.Error != null)
+            _report.Warnings.Add(new SourceNote(_report.RelativePath, dr.ErrorLine, $"#If yapısı çözümlenemedi: {dr.Error}; #If satırları olduğu gibi bırakıldı"));
+        _report.Warnings.AddRange(dr.Warnings);
+        _report.Changes.AddRange(dr.Changes);
+        if (dr.Changed) _changed = true;
+
         List<Node> tree;
         try
         {
-            tree = BlockParser.Parse(logical);
+            tree = BlockParser.Parse(dr.Kept);
         }
         catch (BlockParseException ex)
         {
             _report.Failed = true;
+            _report.Changes.Clear();
             _report.Warnings.Add(new SourceNote(_report.RelativePath, ex.Line, $"Blok yapısı çözümlenemedi: {ex.Message}"));
             return new RewriteResult { Output = file.OriginalBytes, Changed = false, Report = _report, FlagReferences = refs };
         }
@@ -215,6 +229,12 @@ public sealed class Rewriter
                 Warn(unclean.Line.LineNumber, "Blok satırı etiket veya ':' ile ek ifade içeriyor; bu If bloğu değiştirilmedi", unclean.Line.Text.Trim());
                 structural = false;
             }
+            // silinecek dalda yarım kalan #If/#End If varsa silmek derlenmeyen kod üretir
+            else if (removed.FirstOrDefault(b => !DirectivesBalanced(BranchLines(b))) is { } crossing)
+            {
+                Warn(crossing.Header.Line.LineNumber, "Blok çözülemeyen bir #If/#End If ile kesişiyor; bu If bloğu değiştirilmedi", crossing.Header.Line.Text.Trim());
+                structural = false;
+            }
         }
 
         if (!structural)
@@ -279,6 +299,29 @@ public sealed class Rewriter
         bool isLabel = ifIndex == 2 && tokens[0].Kind == TokenKind.Identifier || ifIndex == 1;
         if (!isLabel && p.EndsWith(':')) p = p[..^1].TrimEnd();
         return p;
+    }
+
+    private static IEnumerable<ClassifiedLine> BranchLines(Branch b)
+        => b.Body.SelectMany(BlockParser.AllLines).Prepend(b.Header);
+
+    /// <summary>Satırlardaki #If/#Else/#End If kendi içinde dengeli mi?</summary>
+    private static bool DirectivesBalanced(IEnumerable<ClassifiedLine> lines)
+    {
+        int depth = 0;
+        foreach (var l in lines)
+        {
+            var t = l.Tokens;
+            if (t.Count == 0 || t[0].Kind != TokenKind.Directive) continue;
+            var w = t[0].Text;
+            if (w.Equals("#If", StringComparison.OrdinalIgnoreCase)) depth++;
+            else if (w.Equals("#EndIf", StringComparison.OrdinalIgnoreCase) || w.Equals("#End", StringComparison.OrdinalIgnoreCase) && t.Count > 1 && t[1].Is("If"))
+            {
+                if (--depth < 0) return false;
+            }
+            else if ((w.Equals("#Else", StringComparison.OrdinalIgnoreCase) || w.Equals("#ElseIf", StringComparison.OrdinalIgnoreCase)) && depth == 0)
+                return false;
+        }
+        return depth == 0;
     }
 
     private static string CondSource(ClassifiedLine h)
