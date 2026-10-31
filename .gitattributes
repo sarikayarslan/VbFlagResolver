@@ -1,0 +1,4 @@
+# VB5 örnekleri Windows-1254 + CRLF; test dosya çiftleri bayt düzeyinde karşılaştırılıyor.
+# Git satır sonu/encoding dönüşümü yapmasın.
+samples/** -text
+tests/VbFlagResolver.Tests/Cases/** -text

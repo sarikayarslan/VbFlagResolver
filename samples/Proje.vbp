@@ -1,0 +1,17 @@
+Type=Exe
+Form=frmMain.frm
+Form=frmAyarlar.frm
+Form=frmRapor.frm
+Module=mDevelopmentFlags; mDevelopmentFlags.bas
+Module=modGenel; modGenel.bas
+Object={831FDD16-0C5C-11D2-A9FC-0000F8754DA1}#2.0#0; MSCOMCTL.OCX
+Startup="Sub Main"
+ExeName32="StokTakip.exe"
+Command32=""
+Name="StokTakip"
+HelpContextID="0"
+CompatibleMode="0"
+MajorVer=5
+MinorVer=2
+RevisionVer=1
+AutoIncrementVer=0

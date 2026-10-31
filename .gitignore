@@ -1,0 +1,8 @@
+bin/
+obj/
+publish/
+out/
+*.user
+.vs/
+rapor*.txt
+CLAUDE.md
