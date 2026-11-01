@@ -28,6 +28,8 @@ public sealed class FileReport
     public List<SourceNote> Warnings { get; } = [];
     public bool Changed { get; set; }
     public bool Failed { get; set; }
+    /// <summary>Kullanıcı işaretledi: dönüştürülmeden olduğu gibi aktarıldı (atama/gölgeleme taraması yine yapılır).</summary>
+    public bool KeptAsIs { get; set; }
     public int RemovedLines { get; set; }
     /// <summary>Önizleme (fark gösterimi) için orijinal ve üretilen içerik.</summary>
     public byte[]? OriginalBytes { get; set; }
@@ -93,7 +95,11 @@ public sealed class Report
         sb.AppendLine("DOSYALAR");
         sb.AppendLine(new string('-', 60));
         var changed = Files.Where(f => f.Changed).ToList();
-        sb.AppendLine($"İşlenen dosya : {Files.Count}  (değişecek: {changed.Count}, hatalı: {Files.Count(f => f.Failed)})");
+        var kept = Files.Where(f => f.KeptAsIs).ToList();
+        sb.AppendLine($"İşlenen dosya : {Files.Count}  (değişecek: {changed.Count}, hatalı: {Files.Count(f => f.Failed)}" +
+                      $"{(kept.Count > 0 ? $", olduğu gibi aktarılan: {kept.Count}" : "")})");
+        if (kept.Count > 0)
+            sb.AppendLine($"Olduğu gibi aktarılan (işaretli): {Abbrev(kept.Select(f => f.RelativePath).ToList(), 30)}");
         sb.AppendLine($"Toplam        : {Sum(ChangeKind.BlockRemoved)} blok silindi, {Sum(ChangeKind.BlockLifted)} blok açıldı, " +
                       $"{Sum(ChangeKind.BlockSimplified)} blok sadeleşti, {Sum(ChangeKind.SingleLineIf)} tek satırlık If, " +
                       $"{Sum(ChangeKind.DirectiveResolved)} #If çözüldü, " +
@@ -113,7 +119,7 @@ public sealed class Report
                 sb.AppendLine($"  UYARI satır {w.Line,5}: {w.Message}{(w.Text != null ? "  | " + w.Text : "")}");
             sb.AppendLine();
         }
-        int unchanged = Files.Count(f => !f.Changed && f.Warnings.Count == 0 && !f.Failed);
+        int unchanged = Files.Count(f => !f.Changed && f.Warnings.Count == 0 && !f.Failed && !f.KeptAsIs);
         if (unchanged > 0) sb.AppendLine($"Değişmeyen dosya: {unchanged}");
         if (CopiedFiles.Count > 0) sb.AppendLine($"Olduğu gibi kopyalanan diğer dosya: {CopiedFiles.Count}");
         sb.AppendLine($"Toplam uyarı: {WarningCount}");

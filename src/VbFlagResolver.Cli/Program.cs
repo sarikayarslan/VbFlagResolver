@@ -28,6 +28,8 @@ internal static class Program
                                  (dosya içindeki #Const satırları o dosyada yine geçerlidir).
           --no-directives        #If gruplarını çözme; #If içindeki bayrak tanımları/atamaları Bilinmiyor sayılır.
           --ext <uzantılar>      İşlenecek uzantılar, virgülle. Varsayılan: .frm,.bas,.cls,.ctl,.dob,.pag
+          --keep <dosyalar>      Dönüştürülmeden olduğu gibi aktarılacak dosyalar, virgülle; göreli yol veya dosya adı,
+                                 * ve ? kullanılabilir (ör. frmEski.frm,Moduller\*.bas). Tekrar verilebilir.
           --no-copy              Kaynak olmayan dosyaları (.frx, .vbp, ...) çıktıya kopyalama.
           --codepage <n>         Kaynak kod sayfası. Varsayılan: 1254
           -h, --help             Bu yardımı göster.
@@ -44,6 +46,7 @@ internal static class Program
         var mode = FlagReadMode.Auto;
         string[]? initProcs = null;
         string[]? exts = null;
+        var keep = new List<string>();
         int codePage = 1254;
 
         try
@@ -74,6 +77,7 @@ internal static class Program
                         break;
                     case "--init-proc": initProcs = SplitList(Next()); break;
                     case "--ext": exts = SplitList(Next()).Select(e => e.StartsWith('.') ? e : "." + e).ToArray(); break;
+                    case "--keep": keep.AddRange(SplitList(Next())); break;
                     case "--codepage":
                         var cp = Next();
                         if (!int.TryParse(cp, out codePage)) throw new ArgumentException($"Geçersiz --codepage: {cp}");
@@ -116,6 +120,7 @@ internal static class Program
                 ResolveDirectives = !noDirectives,
                 FlagOptions = new FlagReaderOptions { Mode = mode, InitProcedures = initProcs, UnassignedVariableIsFalse = !unassignedUnknown },
                 Extensions = exts ?? new ProcessOptions { FlagsPath = "", SourceDir = "" }.Extensions,
+                KeepAsIs = keep,
             };
             // rapor da orijinal dosyaların üzerine yazılamaz; dönüşümden önce kontrol et
             if (reportPath != null) new WriteGuard(Path.GetFullPath(src), Path.GetFullPath(flags)).CheckFile(reportPath);

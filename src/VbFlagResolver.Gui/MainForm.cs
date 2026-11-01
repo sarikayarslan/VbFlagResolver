@@ -68,6 +68,15 @@ internal sealed class MainForm : Form
     /// <summary>Son önizleme/dönüştürme raporu güncel girdilerle mi üretildi?</summary>
     private bool _reportIsCurrent;
     private readonly System.Windows.Forms.Timer _flagReadTimer = new() { Interval = 400 };
+    /// <summary>"Olduğu gibi aktar" işaretleri değişince önizlemeyi kısa gecikmeyle yeniler.</summary>
+    private readonly System.Windows.Forms.Timer _keepTimer = new() { Interval = 500 };
+    private bool _fillingFiles;
+    private string? _reselectFile;
+    /// <summary>
+    /// Dosya listesinde son fare tıklaması/boşluk tuşu zamanı. ListView, öğeler eklenirken veya tutamaç yeniden
+    /// oluşturulurken de ItemChecked gönderir; yalnızca kullanıcı girdisinin hemen ardından gelen işaret değişikliği sayılır.
+    /// </summary>
+    private DateTime _lastFileListInput = DateTime.MinValue;
     private readonly TextBox _txtReport = new()
     {
         Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Both, WordWrap = false,
@@ -212,7 +221,8 @@ internal sealed class MainForm : Form
 
     private TabPage BuildFilesTab()
     {
-        AddColumn(_lvFiles, "Dosya", 165);
+        _lvFiles.CheckBoxes = true; // işaretli dosya dönüştürülmeden olduğu gibi aktarılır
+        AddColumn(_lvFiles, "☑ = olduğu gibi aktar", 185);
         AddColumn(_lvFiles, "Durum", 75);
         AddColumn(_lvFiles, "Silinen", 52, HorizontalAlignment.Right);
         AddColumn(_lvFiles, "Açılan", 50, HorizontalAlignment.Right);
@@ -324,6 +334,18 @@ internal sealed class MainForm : Form
         _btnOpenOut.Click += (_, _) => OpenFolder(_txtOut.Text);
         _btnClear.Click += (_, _) => ClearAll();
         _lvFiles.SelectedIndexChanged += (_, _) => ShowSelectedFile();
+        bool doubleClick = false;
+        _lvFiles.MouseDown += (_, e) => { _lastFileListInput = DateTime.UtcNow; doubleClick = e.Clicks > 1; };
+        // ListView çift tıklamada işareti değiştirir; dosyaya bakmak için çift tıklayan kullanıcı yanlışlıkla işaretlemesin
+        _lvFiles.ItemCheck += (_, e) => { if (doubleClick) e.NewValue = e.CurrentValue; };
+        _lvFiles.KeyDown += (_, e) => { if (e.KeyCode == Keys.Space) _lastFileListInput = DateTime.UtcNow; };
+        _lvFiles.ItemChecked += (_, e) => ToggleKeep(e.Item);
+        _keepTimer.Tick += async (_, _) =>
+        {
+            _keepTimer.Stop();
+            if (_btnPreview.Enabled) await RunAsync(dryRun: true);
+            else _keepTimer.Start(); // bir işlem sürüyor: bitince tekrar dene
+        };
         _chkAllLines.CheckedChanged += (_, _) => ShowSelectedFile();
         _txtFlagFilter.TextChanged += (_, _) => FillFlags();
         _cmbFlagValue.SelectedIndexChanged += (_, _) => FillFlags();
@@ -437,6 +459,7 @@ internal sealed class MainForm : Form
             ResolveDirectives = _chkDirectives.Checked,
             CodePage = (int)_numCodePage.Value,
             Extensions = exts.Length > 0 ? exts : new ProcessOptions { FlagsPath = "", SourceDir = "" }.Extensions,
+            KeepAsIs = Directory.Exists(_txtSrc.Text.Trim()) ? _settings.KeepFor(_txtSrc.Text.Trim()).ToList() : [],
             FlagOptions = new FlagReaderOptions
             {
                 Mode = (FlagReadMode)Math.Max(0, _cmbMode.SelectedIndex),
@@ -537,21 +560,23 @@ internal sealed class MainForm : Form
 
     private void Populate(Report report)
     {
+        _fillingFiles = true;
         _lvFiles.BeginUpdate();
         _lvFiles.Items.Clear();
         var ordered = report.Files
             .OrderByDescending(f => f.Failed).ThenByDescending(f => f.Changed || f.Warnings.Count > 0)
-            .ThenBy(f => f.RelativePath, StringComparer.OrdinalIgnoreCase);
+            .ThenBy(f => f.KeptAsIs).ThenBy(f => f.RelativePath, StringComparer.OrdinalIgnoreCase);
         foreach (var f in ordered)
         {
-            string state = f.Failed ? "HATA" : f.Changed ? "Değişiyor" : f.Warnings.Count > 0 ? "Uyarı" : "Aynı";
+            string state = f.Failed ? "HATA" : f.KeptAsIs ? "Olduğu gibi" : f.Changed ? "Değişiyor" : f.Warnings.Count > 0 ? "Uyarı" : "Aynı";
             var item = new ListViewItem([
                 f.RelativePath, state,
                 f.Count(ChangeKind.BlockRemoved).ToString(), f.Count(ChangeKind.BlockLifted).ToString(),
                 f.Count(ChangeKind.BlockSimplified).ToString(), f.Count(ChangeKind.SingleLineIf).ToString(),
                 f.RemovedLines.ToString(), f.Warnings.Count.ToString(), f.Count(ChangeKind.DirectiveResolved).ToString(),
-            ]) { Tag = f };
+            ]) { Tag = f, Checked = f.KeptAsIs };
             if (f.Failed) item.ForeColor = Color.Firebrick;
+            else if (f.KeptAsIs) item.ForeColor = Color.SteelBlue;
             else if (f.Changed) item.Font = new Font(_lvFiles.Font, FontStyle.Bold);
             else if (f.Warnings.Count == 0) item.ForeColor = Color.Gray;
             if (f.Warnings.Count > 0) item.SubItems[7].ForeColor = Color.DarkOrange;
@@ -559,13 +584,40 @@ internal sealed class MainForm : Form
             _lvFiles.Items.Add(item);
         }
         _lvFiles.EndUpdate();
+        _fillingFiles = false;
 
         FillFlags();
         _txtReport.Text = report.ToText().Replace("\r\n", "\n").Replace("\n", "\r\n");
         _tabs.TabPages[0].Text = $"Dosyalar ve önizleme ({report.Files.Count(f => f.Changed)} değişiyor)";
 
-        if (_lvFiles.Items.Count > 0) _lvFiles.Items[0].Selected = true;
+        // işaret değiştirildikten sonraki yenilemede aynı dosya seçili kalsın
+        var reselect = _reselectFile == null ? null
+            : _lvFiles.Items.Cast<ListViewItem>().FirstOrDefault(i => ((FileReport)i.Tag!).RelativePath == _reselectFile);
+        _reselectFile = null;
+        if (reselect != null) { reselect.Selected = true; reselect.EnsureVisible(); }
+        else if (_lvFiles.Items.Count > 0) _lvFiles.Items[0].Selected = true;
         else ShowSelectedFile();
+    }
+
+    /// <summary>Dosyanın "olduğu gibi aktar" işaretini bu kaynak klasör için kaydeder ve önizlemeyi yeniler.</summary>
+    private void ToggleKeep(ListViewItem item)
+    {
+        if (_fillingFiles || item.Tag is not FileReport f || !Directory.Exists(_txtSrc.Text.Trim())) return;
+        if ((DateTime.UtcNow - _lastFileListInput).TotalMilliseconds > 500)
+        {
+            // kullanıcı girdisi olmadan gelen olay: listedeki görünümü rapordaki duruma geri çek
+            if (item.Checked != f.KeptAsIs) BeginInvoke(() => { _fillingFiles = true; item.Checked = f.KeptAsIs; _fillingFiles = false; });
+            return;
+        }
+        var keep = _settings.KeepFor(_txtSrc.Text.Trim());
+        keep.RemoveAll(k => k.Equals(f.RelativePath, StringComparison.OrdinalIgnoreCase));
+        if (item.Checked) keep.Add(f.RelativePath);
+        _settings.Save();
+        _reselectFile = f.RelativePath;
+        item.SubItems[1].Text = item.Checked ? "Olduğu gibi" : "yenileniyor...";
+        _reportIsCurrent = false;
+        _keepTimer.Stop();
+        _keepTimer.Start();
     }
 
     // ------------------------------------------------------------------ bayraklar
@@ -796,7 +848,9 @@ internal sealed class MainForm : Form
             var item = new ListViewItem([w.Line.ToString(), "UYARI", w.Message + (w.Text != null ? "   | " + w.Text : "")]) { ForeColor = Color.DarkOrange };
             _lvDetails.Items.Add(item);
         }
-        if (_lvDetails.Items.Count == 0)
+        if (f.KeptAsIs)
+            _lvDetails.Items.Add(new ListViewItem(["", "", "İşaretli: dönüştürülmeden olduğu gibi aktarılıyor. İşareti kaldırınca işlenir."]) { ForeColor = Color.SteelBlue });
+        else if (_lvDetails.Items.Count == 0)
             _lvDetails.Items.Add(new ListViewItem(["", "", "Bu dosyada değişiklik veya uyarı yok."]) { ForeColor = Color.Gray });
         _lvDetails.EndUpdate();
     }

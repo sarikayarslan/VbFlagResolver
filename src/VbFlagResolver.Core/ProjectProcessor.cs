@@ -16,6 +16,27 @@ public sealed class ProcessOptions
     public string? Defines { get; init; }
     /// <summary>#If gruplarını derleme sabitlerine göre çöz.</summary>
     public bool ResolveDirectives { get; init; } = true;
+    /// <summary>
+    /// Dönüştürülmeden olduğu gibi aktarılacak dosyalar: kaynak klasöre göre göreli yol veya dosya adı, * ve ? kullanılabilir
+    /// ("frmEski.frm", "Moduller\*.bas"). Bu dosyalardaki bayrak atamaları yine taranır.
+    /// </summary>
+    public IReadOnlyCollection<string> KeepAsIs { get; init; } = [];
+
+    /// <summary>Göreli yol, KeepAsIs desenlerinden birine uyuyor mu? Eğik çizgi içermeyen desen yalnızca dosya adına bakar.</summary>
+    public static bool MatchesKeep(string relativePath, IEnumerable<string> patterns)
+    {
+        string rel = relativePath.Replace('/', '\\');
+        foreach (var raw in patterns)
+        {
+            var p = raw.Trim().Replace('/', '\\').TrimStart('.', '\\');
+            if (p.Length == 0) continue;
+            string target = p.Contains('\\') ? rel : Path.GetFileName(rel);
+            var regex = "^" + System.Text.RegularExpressions.Regex.Escape(p).Replace(@"\*", ".*").Replace(@"\?", ".") + "$";
+            if (System.Text.RegularExpressions.Regex.IsMatch(target, regex, System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                return true;
+        }
+        return false;
+    }
 }
 
 /// <summary>Bayrakları okur, tüm kaynakları tarar, dönüştürür ve (kuru çalıştırma değilse) çıktıyı yazar.</summary>
@@ -101,6 +122,21 @@ public static class ProjectProcessor
         var rewriter = new Rewriter(flagResult.Flags, moduleNames, consts, o.ResolveDirectives);
         foreach (var (rel, file) in sources)
         {
+            if (ProcessOptions.MatchesKeep(rel, o.KeepAsIs))
+            {
+                // işaretli: dönüştürülmez, bayt bayt aynen yazılır
+                report.Files.Add(new FileReport
+                {
+                    RelativePath = rel, KeptAsIs = true, OriginalBytes = file.OriginalBytes, OutputBytes = file.OriginalBytes,
+                });
+                foreach (var name in file.GetLogicalLines().SelectMany(l => l.Tokens)
+                             .Where(t => t.Kind == TokenKind.Identifier && flagResult.Flags.IsFlag(t.Text))
+                             .Select(t => flagResult.Flags.Get(t.Text)!.Name).Distinct(StringComparer.OrdinalIgnoreCase))
+                    report.FlagUsage[name] = report.FlagUsage.GetValueOrDefault(name) + 1;
+                outputs.Add((rel, file.OriginalBytes));
+                log?.Invoke($"  {rel}: olduğu gibi aktarıldı (işaretli)");
+                continue;
+            }
             var r = rewriter.Rewrite(file, rel);
             r.Report.OriginalBytes = file.OriginalBytes;
             r.Report.OutputBytes = r.Output;

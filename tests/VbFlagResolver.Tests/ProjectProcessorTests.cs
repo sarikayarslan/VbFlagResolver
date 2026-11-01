@@ -194,6 +194,41 @@ public class ProjectProcessorTests
         Assert.Contains(report.FlagNotes, n => n.Message.Contains("InitFlags çalıştırılmış sayıldı ama projede çağrıldığı yer bulunamadı"));
     }
 
+    [Theory]
+    [InlineData("frmSiparis.frm", "frmSiparis.frm")]
+    [InlineData("FRMSIPARIS.FRM", "frmSiparis.frm")]               // büyük/küçük harf duyarsız
+    [InlineData("Moduller\\*.bas", "Moduller\\modRapor.bas")]       // klasör + joker
+    [InlineData("modRapor.bas", "Moduller\\modRapor.bas")]          // yalnızca dosya adı
+    [InlineData("frm*.frm", "frmSiparis.frm")]
+    public void Keep_patterns_match(string pattern, string rel)
+        => Assert.True(ProcessOptions.MatchesKeep(rel, [pattern]));
+
+    [Theory]
+    [InlineData("frmSiparis.frm", "Moduller\\frmSiparis2.frm")]
+    [InlineData("Moduller\\*.bas", "modGenel.bas")]
+    public void Keep_patterns_do_not_match(string pattern, string rel)
+        => Assert.False(ProcessOptions.MatchesKeep(rel, [pattern]));
+
+    [Fact]
+    public void Kept_files_are_copied_byte_identical_but_still_scanned()
+    {
+        var outDir = TestPaths.NewTempDir();
+        var o = Options(outDir);
+        var report = ProjectProcessor.Run(new ProcessOptions
+        {
+            FlagsPath = o.FlagsPath, SourceDir = o.SourceDir, OutputDir = outDir, KeepAsIs = ["frmSiparis.frm", "Moduller\\*.bas"],
+        });
+        foreach (var rel in new[] { "frmSiparis.frm", Path.Combine("Moduller", "modRapor.bas") })
+            Assert.Equal(File.ReadAllBytes(Path.Combine(TestPaths.SamplesDir, rel)), File.ReadAllBytes(Path.Combine(outDir, rel)));
+        var sip = report.Files.Single(f => f.RelativePath == "frmSiparis.frm");
+        Assert.True(sip.KeptAsIs);
+        Assert.False(sip.Changed);
+        // işaretli dosyadaki parametre gölgelemesi yine taranır
+        Assert.False(report.Flags.TryGetKnown("FLAG_GOLGE", out _));
+        Assert.Contains("olduğu gibi aktarılan: 2", report.ToText());
+        Assert.True(report.Files.Single(f => f.RelativePath == "frmMain.frm").Changed);
+    }
+
     [Fact]
     public void Output_inside_source_is_refused()
         => Assert.Throws<ArgumentException>(() => ProjectProcessor.Run(Options(Path.Combine(TestPaths.SamplesDir, "out"))));

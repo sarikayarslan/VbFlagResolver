@@ -118,7 +118,9 @@ Tek dosyalık exe ilk açılışta kendini birkaç saniye içinde hazırlar; son
    Okuma seçenekleri değiştirilince liste yeniden okunur.
 2. **Önizle (F5)** dosya yazmadan çalışır. Sonuçlar üç sekmede görünür:
    - **Dosyalar ve önizleme:** dosya başına silinen/açılan/sadeleşen blok sayıları; seçilen dosyanın renkli farkı
-     (orijinal ↔ yeni satır numaralarıyla) ve satır satır değişiklik/uyarı listesi.
+     (orijinal ↔ yeni satır numaralarıyla) ve satır satır değişiklik/uyarı listesi. Bir dosyanın başındaki kutuyu
+     işaretlerseniz o dosya **dönüştürülmeden olduğu gibi aktarılır** (önizleme kendiliğinden yenilenir). İşaretler
+     kaynak klasör başına saklanır. İşaretli dosyalardaki bayrak atamaları yine taranır (bayrağı Bilinmiyor yapabilir).
    - **Bayraklar:** önizlemeden sonra kullanıldıkları dosya sayısı ve formlardaki atamalar nedeniyle Bilinmiyor
      olanlar da eklenir; arama ve değere göre filtre (True/False/Bilinmiyor/kullanılmayan); bayrak dosyasında
      tanınmayan satırlar.
@@ -174,6 +176,7 @@ klasörün içinde veya bayrak dosyasının kendisi olamaz. Yollar junction/syml
 | `--init-proc A,B` | Değişken bayraklara değer veren yordamlar, exe açılırken **çağrıldıkları sırayla** (arayüzde "Çağrı sırası"). Aynı bayrakta son atama geçerli. Varsayılan: tüm yordamlar (aşağıya bakın). |
 | `--unassigned-unknown` | Hiç atanmamış Boolean değişkeni False yerine Bilinmiyor say. |
 | `--ext .frm,.bas` | İşlenecek uzantılar. |
+| `--keep frmEski.frm,Moduller\*.bas` | Bu dosyaları dönüştürmeden olduğu gibi aktar. Göreli yol veya yalnızca dosya adı; `*` ve `?` kullanılabilir; tekrar verilebilir. Bayrak atamaları yine taranır. |
 | `--no-copy` | Kaynak olmayan dosyaları kopyalama. |
 | `--codepage 1254` | Kaynak kod sayfası. |
 | `--define A=0,B=1` | `#If` için derleme sabitleri; `.vbp` CondComp değerlerini ezer. |

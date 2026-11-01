@@ -17,6 +17,8 @@ internal sealed class GuiSettings
     /// <summary>Kullanıcının verdiği derleme sabitleri ("DEBUG_MODE=0, X=1").</summary>
     public string Defines { get; set; } = "";
     public bool ResolveDirectives { get; set; } = true;
+    /// <summary>Kaynak klasör (tam yol) → olduğu gibi aktarılacak dosyaların göreli yolları.</summary>
+    public Dictionary<string, List<string>> KeepAsIs { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     private static string FilePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "VbFlagResolver", "gui-settings.json");
@@ -25,14 +27,26 @@ internal sealed class GuiSettings
     {
         try
         {
-            if (File.Exists(FilePath))
-                return JsonSerializer.Deserialize<GuiSettings>(File.ReadAllText(FilePath)) ?? new GuiSettings();
+            if (File.Exists(FilePath) && JsonSerializer.Deserialize<GuiSettings>(File.ReadAllText(FilePath)) is { } s)
+            {
+                // JSON'dan gelen sözlük büyük/küçük harf duyarlıdır; Windows yolları için duyarsız olanla değiştir
+                s.KeepAsIs = new Dictionary<string, List<string>>(s.KeepAsIs ?? [], StringComparer.OrdinalIgnoreCase);
+                return s;
+            }
         }
         catch
         {
             // bozuk ayar dosyası: varsayılanlarla devam
         }
         return new GuiSettings();
+    }
+
+    /// <summary>Bu kaynak klasör için işaretli dosyalar (yoksa boş liste oluşturur).</summary>
+    public List<string> KeepFor(string sourceDir)
+    {
+        string key = Path.GetFullPath(sourceDir).TrimEnd('\\', '/');
+        if (!KeepAsIs.TryGetValue(key, out var list)) KeepAsIs[key] = list = [];
+        return list;
     }
 
     public void Save()
