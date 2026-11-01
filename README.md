@@ -1,8 +1,51 @@
 # VbFlagResolver
 
-VB5 projesindeki geliştirme bayraklarını (`mDevelopmentFlags.bas`) okuyup `.frm/.bas/.cls/.ctl`
-dosyalarındaki `If/ElseIf/Else` bloklarını bu bayraklara göre sadeleştiren araç. Orijinal dosyalara asla yazmaz;
-çıktıyı ayrı bir klasöre üretir ve rapor verir.
+Visual Basic 5/6 projelerinde geliştirme bayraklarına (feature flag) bağlı ölü kodu temizleyen araç.
+
+Uzun yaşayan VB projelerinde yeni özellikler genellikle bir bayrak modülündeki Boolean sabit veya değişkenlerle
+açılıp kapatılır (`Public Const FLAG_YENI_RAPOR = True`, `gbFlagX As Boolean` + `InitFlags` içinde atama). Zamanla
+yüzlerce bayrak ve bunlara bağlı, artık hiç çalışmayan `If` dalları birikir. VbFlagResolver bayrak modülünü okur,
+her bayrağın değerini çıkarır ve projedeki `.frm/.bas/.cls/.ctl` dosyalarında bu bayraklara bağlı
+`If/ElseIf/Else` ve `#If` bloklarını sadeleştirir:
+
+Önce (`FLAG_YENI_RAPOR = True`, `FLAG_ESKI_MENU = False`):
+
+```vb
+If FLAG_YENI_RAPOR Then
+    frmRaporYeni.Show
+Else
+    frmRapor.Show
+End If
+If FLAG_ESKI_MENU Or bYetkili Then
+    mnuAyarlar.Visible = True
+End If
+```
+
+Sonra:
+
+```vb
+frmRaporYeni.Show
+If bYetkili Then
+    mnuAyarlar.Visible = True
+End If
+```
+
+- Koşul kesin **True** ise `If` kalkar, dalın içeriği bir seviye sola alınarak yerine konur.
+- Kesin **False** ise dal silinir.
+- Çalışma anında belli olan bir değer içeriyorsa (ör. `bYetkili`) koşul sadeleştirilerek korunur.
+
+Orijinal dosyalara asla yazmaz; çıktıyı ayrı bir klasöre üretir, değişmeyen satırları bayt bayt korur ve her
+değişikliği ve olası riski (silinen koddaki fonksiyon çağrıları, etiketler vb.) raporlar. Arayüzde dosya yazmadan
+önce satır satır fark görülebilir.
+
+## Hızlı başlangıç
+
+1. `publish/` klasöründeki `VbFlagResolver.Gui.exe` dosyasını indirin (kurulum gerekmez, aşağıya bakın).
+2. Bayrak modülünüzü (`.bas`) ve proje klasörünüzü seçip **Önizle**'ye basın.
+3. **Bayraklar** sekmesinde değerlerin doğru okunduğunu, **Dosyalar ve önizleme** sekmesinde değişiklikleri kontrol edin.
+4. **Dönüştür ve çıktıya yaz** ile temizlenmiş projeyi ayrı bir klasöre üretin, VB'de açıp derleyin.
+
+Denemek için depodaki `samples/` klasörü hazır bir örnek proje içerir.
 
 ## Hazır exe'yi indirme (derlemeden kullanmak için)
 
@@ -16,8 +59,8 @@ Derlenmiş exe'ler depoda `publish/` klasöründe durur; .NET kurmaya veya derle
 GitHub sayfasından indirmek için: `publish` klasörüne girin → exe'ye tıklayın → sağ üstteki **Download raw file**
 (aşağı ok) düğmesine basın. Tarayıcı veya SmartScreen imzasız exe için uyarı verebilir: **Sakla / Ek bilgi → Yine de çalıştır**.
 
-Kod değiştiğinde exe'ler aşağıdaki 5. adımla yeniden üretilip `publish/` klasörüyle birlikte commit edilmelidir;
-aksi halde depodaki exe eski kodla kalır.
+Katkıda bulunanlar için: kod değiştiğinde exe'ler aşağıdaki 5. adımla yeniden üretilip `publish/` klasörüyle
+birlikte commit edilmelidir; aksi halde depodaki exe eski kodla kalır.
 
 ## Derleme
 
@@ -32,7 +75,7 @@ aksi halde depodaki exe eski kodla kalır.
 
 Visual Studio gerekmez; isterseniz `VbFlagResolver.sln` Visual Studio 2022 (17.12+) veya Rider ile de açılır.
 
-**Exe'yi kullanacak şirket bilgisayarında hiçbir şey kurulu olması gerekmez** (.NET dahil); bkz. adım 5.
+**Exe'yi çalıştıracak bilgisayarda hiçbir şey kurulu olması gerekmez** (.NET dahil); bkz. adım 5 ve 6.
 
 ### 2. Kaynakları alma
 
@@ -90,11 +133,16 @@ Sonuç `publish\` klasöründe:
 
 Yanlarında `.pdb` dosyası oluşursa (hata ayıklama bilgisi) silinebilir; çalışmak için gerekmez.
 
+### 6. Başka bir bilgisayarda kullanma
 
-1. `publish\` içindeki exe'yi (birini veya ikisini) USB bellek veya ağ paylaşımıyla kopyalayın. Başka dosya gerekmez.
-2. İlk açılışta Windows SmartScreen "Windows bilgisayarınızı korudu" uyarısı verebilir (exe imzalı değil):
-   **Ek bilgi → Yine de çalıştır**.
-3. İlk çalıştırmayı mutlaka **Önizle** (arayüz) veya `--dry-run` (komut satırı) ile yapın.
+1. Exe'yi (birini veya ikisini) VB projesinin bulunduğu bilgisayara kopyalayın. Başka dosya gerekmez.
+   E-posta gibi bazı yollar `.exe` eki engeller; zip'leyerek aktarabilirsiniz.
+2. İnternetten indirilen dosya engellenmiş olabilir: exe'ye sağ tık → **Özellikler** → **Engellemeyi kaldır**
+   (veya PowerShell'de `Unblock-File .\VbFlagResolver.Gui.exe`).
+3. İlk açılışta Windows SmartScreen "Windows bilgisayarınızı korudu" uyarısı verebilir (exe imzalı değil):
+   **Ek bilgi → Yine de çalıştır**. Kurumsal bilgisayarlarda imzasız programlar yönetici tarafından engellenmiş
+   olabilir; bu durumda sistem yöneticinizden izin isteyin.
+4. İlk çalıştırmayı mutlaka **Önizle** (arayüz) veya `--dry-run` (komut satırı) ile yapın.
 
 Tek dosyalık exe ilk açılışta kendini birkaç saniye içinde hazırlar; sonraki açılışlar daha hızlıdır.
 
@@ -148,7 +196,7 @@ Tek dosyalık exe ilk açılışta kendini birkaç saniye içinde hazırlar; son
 Son kullanılan yollar ve seçenekler `%APPDATA%\VbFlagResolver\gui-settings.json` dosyasında saklanır.
 Alanlar komut satırından da doldurulabilir: `VbFlagResolver.Gui.exe --flags x.bas --src klasör [--out klasör] [--preview]`.
 
-## Kullanım
+## Komut satırı kullanımı
 
 İlk çalıştırma mutlaka kuru modda yapılmalı:
 
