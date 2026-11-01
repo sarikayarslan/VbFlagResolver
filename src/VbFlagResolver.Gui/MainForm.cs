@@ -820,6 +820,12 @@ internal sealed class MainForm : Form
             FileName = $"VbFlagResolver-rapor-{DateTime.Now:yyyyMMdd-HHmm}.txt",
         };
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        try { new WriteGuard(_report.SourceDir, _report.FlagsFile).CheckFile(dlg.FileName); }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException)
+        {
+            MessageBox.Show(this, ex.Message + "\n\nRaporu kaynak klasörün dışına kaydedin.", "Raporu kaydet", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
         File.WriteAllText(dlg.FileName, _report.ToText(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
         _lblStatus.Text = "Rapor kaydedildi: " + dlg.FileName;
     }

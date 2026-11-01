@@ -151,14 +151,17 @@ Alanlar komut satırından da doldurulabilir: `VbFlagResolver.Gui.exe --flags x.
 İlk çalıştırma mutlaka kuru modda yapılmalı:
 
 ```
-VbFlagResolver.exe --flags C:\Proje\mDevelopmentFlags.bas --src C:\Proje --dry-run --report rapor.txt
+VbFlagResolver.exe --flags C:\Proje\mDevelopmentFlags.bas --src C:\Proje --dry-run --report C:\rapor.txt
 ```
 
-Rapor uygunsa çıktı üret (orijinal dosyalara asla yazılmaz; `--out` kaynak klasörle aynı veya onun üstü olamaz):
+Rapor uygunsa çıktı üret:
 
 ```
-VbFlagResolver.exe --flags C:\Proje\mDevelopmentFlags.bas --src C:\Proje --out C:\Proje_temiz --report rapor.txt
+VbFlagResolver.exe --flags C:\Proje\mDevelopmentFlags.bas --src C:\Proje --out C:\Proje_temiz --report C:\rapor.txt
 ```
+
+Orijinal dosyalara asla yazılmaz: `--out` kaynak klasörle aynı, onun içinde veya üstünde olamaz; `--report` kaynak
+klasörün içinde veya bayrak dosyasının kendisi olamaz. Yollar junction/symlink'ler çözülerek karşılaştırılır.
 
 | Seçenek | Açıklama |
 |---|---|
@@ -188,6 +191,15 @@ gelir. Yordamlar metindeki sırayla değil, **çağrı sırasıyla** çalışmı
   Doğru sırayı bulmak için rapordaki "Projede çağrıldıkları yerler" bölümüne bakın (ör. `Sub Main` veya `Form_Load`).
 - `If`/döngü içindeki, koşullu `Exit Sub`'dan sonraki veya koşullu çağrılan yordamdaki atama: Bilinmiyor
   (aynı zincirde sonradan koşulsuz atama gelirse o geçerli olur). Koşulsuz `Exit Sub`'dan sonraki atama yok sayılır.
+- Tek satırlık If içindeki atama (`If Command$ = "/dev" Then gbX = True`, `:` ile devam eden kısım dahil): Bilinmiyor.
+- Yordamda `GoTo`/`GoSub` varsa o yordamdaki tüm atamalar Bilinmiyor sayılır (hangisinin atlandığı bilinemez).
+  `On Error GoTo Hata` varsa hata verebilecek bir satırdan (çağrı, hesaplanamayan ifade) sonraki atamalar ve
+  `Exit Sub`'dan sonraki hata bölümündeki atamalar Bilinmiyor sayılır.
+- Satır numaralı (`10  gbX = True`) atamalar okunur; satır başındaki `Ad:` etikettir, yordam çağrısı sayılmaz.
+- Çalıştırılmış sayılan ama projede hiç çağrılmayan bayrak yordamları raporda not olarak belirtilir.
+- `Private`/`Dim`/kapsamsız `Const` bayraklar başka modülden erişilemez; başka bir dosyada kullanılıyorsa Bilinmiyor
+  sayılır ve raporlanır.
+- `mDevelopmentFlags.gbX = True` gibi modül adıyla yazılmış atama da okunur.
 - Yordam dışındaki atama (`End Sub`'dan sonra `gbX = False`) VB'de derlenmez: bayrak Bilinmiyor sayılır ve raporlanır.
 - Hiç atanmamış Boolean değişken VB varsayılanı olan False sayılır (`--unassigned-unknown` ile Bilinmiyor).
 
@@ -218,9 +230,10 @@ Sonuçlar:
 
 - Okunan bayrak sayısı (True/False/Bilinmiyor), Bilinmiyor olanlar ve nedeni, hiç kullanılmayan bayraklar
 - Bayrak dosyasında tanınmayan/atlanan satırlar
-- Başka dosyada atama yapılan veya aynı isimle yeniden bildirilen bayraklar (Bilinmiyor sayılır)
+- Başka dosyada atama yapılan (`For X = ...` dahil), aynı isimle yeniden bildirilen veya aynı isimde parametresi
+  olan bayraklar (Bilinmiyor sayılır)
 - Dosya başına: silinen / açılan / sadeleşen blok ve tek satırlık If sayısı, satır satır değişiklik listesi
-- Uyarılar: silinen kısımdaki fonksiyon çağrıları (VB'de kısa devre yok), silinen etiket/Dim'in başka yerde
+- Uyarılar: silinen kısımdaki fonksiyon çağrıları (VB'de kısa devre yok), silinen etiket/Dim/Const'un başka yerde
   kullanılması, silinen `On Error`, koşul dışında kullanılan bayraklar, çözümlenemeyen koşullar,
   etiket veya `:` içeren (bu yüzden değiştirilmeyen) blok satırları
 
@@ -229,11 +242,22 @@ Sonuçlar:
 - İç içe tek satırlık If (`If A Then If B Then ...`) değiştirilmez, uyarı verilir.
 - Değiştirilen başlık satırı satır devamı (` _`) içeriyorsa tek satıra birleştirilir.
 - Etiket veya `:` ile ek ifade içeren `If/Else/End If` satırlarının bulunduğu bloklar olduğu gibi bırakılır (uyarı verilir).
+- Silinecek dalda, yordamın başka bir yerinden `GoTo` ile atlanan bir etiket veya başka yerde kullanılan bir
+  `Dim`/`Const` varsa, silmek derlenmeyen kod üreteceği için If bloğu olduğu gibi bırakılır (uyarı verilir).
+- `Else If x Then` (boşluklu; VB'de Else + iç içe If) satırının bulunduğu blok olduğu gibi bırakılır; içindeki diğer
+  If'ler ve dosyanın geri kalanı işlenir.
+- Bir blok açılınca bloğu açan `If`, kalan dalın başlığı ve `End If` satırlarındaki yorumlar kendi satırlarında
+  korunur; silinen dalın başlık yorumu o dalla birlikte silinir.
+- Girinti, gövdenin başlıktan derin ilk kod satırına göre bir seviye azaltılır; bundan daha az girintili (hatalı
+  girintili) satırlara dokunulmaz. Sekme 4 sütun sayılır.
+- Tek satırlık If'ten kalan kısım anlamı değişmesin diye düzeltilir: `If FT Then 100` → `GoTo 100`,
+  `If FT Then Init: x = 1` → `Call Init: x = 1` (yoksa `Init` etikete dönüşürdü).
+- `&H`/`&O` sabitleri VB gibi işaretli yorumlanır (`&HFFFF` = -1, `&HFFFF&` = 65535).
 
 ## Yapı
 
 ```
-src/VbFlagResolver.Core    FlagReader, VbSourceFile, Lexer, ExprParser, Simplifier, BlockParser, Rewriter, Report, ProjectProcessor, LineDiff
+src/VbFlagResolver.Core    FlagReader, VbSourceFile, Lexer, ExprParser, Simplifier, BlockParser, Rewriter, Report, ProjectProcessor, LineDiff, WriteGuard
 src/VbFlagResolver.Cli     komut satırı
 src/VbFlagResolver.Gui     WinForms arayüzü (önizleme/fark, bayrak listesi, rapor)
 tests/VbFlagResolver.Tests xUnit; Cases/*.input.bas → *.expected.bas çiftleri (her kural için bir çift)

@@ -15,6 +15,10 @@ public sealed class ClassifiedLine
     public int KeywordIndex { get; init; } = -1;
     /// <summary>Then token indeksi (If/ElseIf/SingleIf).</summary>
     public int ThenIndex { get; init; } = -1;
+    /// <summary>"Else If b Then" (boşluklu): Else satırı iç içe bir blok If de açar; If'in token indeksi.</summary>
+    public int NestedIfIndex { get; init; } = -1;
+    /// <summary>Başka bir satırın (Else If) parçası olan sanal başlık: çıktıya yazılmaz.</summary>
+    public bool Virtual { get; init; }
 
     public List<Token> Tokens => Line.Tokens;
     public Token? Comment => Lexer.Comment(Line.Tokens);
@@ -93,7 +97,11 @@ public static class BlockParser
             };
         }
         if (first.Is("Else"))
-            return new ClassifiedLine { Line = line, Kind = LineKind.Else, Clean = !label && n - k == 1 };
+        {
+            // "Else If b Then": VB'de Else + iç içe blok If (ayrıca bir End If gerekir); ikisi de değiştirilmez
+            bool opens = k + 1 < n && tokens[k + 1].Is("If") && FindThen(tokens, k + 2, n) == n - 1;
+            return new ClassifiedLine { Line = line, Kind = LineKind.Else, Clean = !label && n - k == 1, NestedIfIndex = opens ? k + 1 : -1 };
+        }
         if (first.Is("End") && k + 1 < n && tokens[k + 1].Is("If"))
             return new ClassifiedLine { Line = line, Kind = LineKind.EndIf, Clean = !label && n - k == 2 };
         if (first.Is("EndIf"))
@@ -155,6 +163,20 @@ public static class BlockParser
                     var blk = stack.Peek();
                     if (blk.Branches[^1].Kind == LineKind.Else) throw new BlockParseException("Else'den sonra ElseIf/Else", l.LineNumber);
                     blk.Branches.Add(new Branch { Header = c });
+                    if (c.NestedIfIndex >= 0)
+                    {
+                        var inner = new IfBlock();
+                        inner.Branches.Add(new Branch
+                        {
+                            Header = new ClassifiedLine
+                            {
+                                Line = l, Kind = LineKind.BlockIf, KeywordIndex = c.NestedIfIndex,
+                                ThenIndex = FindThen(l.Tokens, c.NestedIfIndex + 1, l.Tokens.Count), Clean = false, Virtual = true,
+                            },
+                        });
+                        blk.Branches[^1].Body.Add(inner);
+                        stack.Push(inner);
+                    }
                     break;
                 }
                 case LineKind.EndIf:
@@ -184,7 +206,7 @@ public static class BlockParser
             case IfBlock blk:
                 foreach (var b in blk.Branches)
                 {
-                    yield return b.Header;
+                    if (!b.Header.Virtual) yield return b.Header;
                     foreach (var child in b.Body)
                     foreach (var x in AllLines(child))
                         yield return x;

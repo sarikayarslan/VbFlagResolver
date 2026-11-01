@@ -88,10 +88,25 @@ public sealed class CondConstants
             }
         }
         if (!string.IsNullOrWhiteSpace(overrides))
+        {
+            foreach (var bad in InvalidEntries(overrides))
+                notes.Add(new SourceNote("--define", 0, $"Geçersiz derleme sabiti '{bad}' yok sayıldı (AD=değer biçiminde olmalı, ör. DEBUG_MODE=1)"));
             foreach (var (name, value) in ParseList(overrides))
+            {
                 c.Set(name, value, "kullanıcı (--define)");
+                if (value == null) notes.Add(new SourceNote("--define", 0, $"Derleme sabiti {name}: değer hesaplanamadı, bilinmiyor sayıldı"));
+            }
+        }
         return c;
     }
+
+    /// <summary>"AD=değer" biçiminde olmayan parçalar (kullanıcı girdisini doğrulamak için).</summary>
+    public static List<string> InvalidEntries(string spec)
+        => spec.Split([':', ',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(p => p.IndexOf('=') is var eq && (eq <= 0 || p[(eq + 1)..].Trim().Length == 0 || !IsName(p[..eq].Trim())))
+            .ToList();
+
+    private static bool IsName(string s) => s.Length > 0 && char.IsLetter(s[0]) && s.All(ch => char.IsLetterOrDigit(ch) || ch == '_');
 }
 
 /// <summary>Koşullu derleme ifadesinin değeri: sayı veya metin; Known=false ise bilinmiyor.</summary>
@@ -142,7 +157,7 @@ public sealed class DirectiveEvaluator
             var v = e.Level(0);
             return e._pos == e._t.Count ? v : DValue.Unknown;
         }
-        catch (FormatException)
+        catch (Exception ex) when (ex is FormatException or OverflowException)
         {
             return DValue.Unknown;
         }
@@ -352,12 +367,18 @@ public sealed class DirectiveEvaluator
         }
     }
 
-    private static double ParseNumber(string text)
+    internal static double ParseNumber(string text)
     {
         var s = text.TrimEnd('%', '&', '!', '#', '@');
-        if (s.StartsWith("&H", StringComparison.OrdinalIgnoreCase)) return Convert.ToInt64(s[2..], 16);
-        if (s.StartsWith("&O", StringComparison.OrdinalIgnoreCase)) return Convert.ToInt64(s[2..], 8);
-        return double.Parse(s, NumberStyles.Float, CultureInfo.InvariantCulture);
+        bool isLong = text.EndsWith('&');
+        int radix = s.StartsWith("&H", StringComparison.OrdinalIgnoreCase) ? 16 : s.StartsWith("&O", StringComparison.OrdinalIgnoreCase) ? 8 : 0;
+        if (radix == 0) return double.Parse(s, NumberStyles.Float, CultureInfo.InvariantCulture);
+
+        // VB: &H/&O sabitleri işaretli Integer (16 bit) veya Long (32 bit) olarak yorumlanır: &HFFFF = -1, &HFFFF& = 65535
+        ulong u = Convert.ToUInt64(s[2..], radix); // 64 bitten büyükse OverflowException → bilinmiyor
+        if (!isLong && u <= 0xFFFF) return (short)(ushort)u;
+        if (u <= 0xFFFFFFFF) return (int)(uint)u;
+        throw new OverflowException("VB'de 32 bitten büyük &H/&O sabiti derlenmez");
     }
 }
 

@@ -74,7 +74,15 @@ internal static class Program
                         break;
                     case "--init-proc": initProcs = SplitList(Next()); break;
                     case "--ext": exts = SplitList(Next()).Select(e => e.StartsWith('.') ? e : "." + e).ToArray(); break;
-                    case "--codepage": codePage = int.Parse(Next()); break;
+                    case "--codepage":
+                        var cp = Next();
+                        if (!int.TryParse(cp, out codePage)) throw new ArgumentException($"Geçersiz --codepage: {cp}");
+                        try { VbSourceFile.GetEncoding(codePage); }
+                        catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
+                        {
+                            throw new ArgumentException($"Desteklenmeyen kod sayfası: {cp} (Türkçe için 1254)");
+                        }
+                        break;
                     case "-h": case "--help": case "/?":
                         Console.WriteLine(Usage);
                         return 0;
@@ -83,6 +91,8 @@ internal static class Program
             }
             if (flags == null || src == null) throw new ArgumentException("--flags ve --src zorunludur");
             if (!dryRun && outDir == null) throw new ArgumentException("--out veya --dry-run belirtilmeli");
+            if (defines != null && CondConstants.InvalidEntries(defines) is { Count: > 0 } bad)
+                throw new ArgumentException($"Geçersiz --define: {string.Join(", ", bad)} (AD=değer biçiminde olmalı, ör. DEBUG_MODE=1)");
         }
         catch (Exception ex) when (ex is ArgumentException or FormatException)
         {
@@ -107,6 +117,8 @@ internal static class Program
                 FlagOptions = new FlagReaderOptions { Mode = mode, InitProcedures = initProcs, UnassignedVariableIsFalse = !unassignedUnknown },
                 Extensions = exts ?? new ProcessOptions { FlagsPath = "", SourceDir = "" }.Extensions,
             };
+            // rapor da orijinal dosyaların üzerine yazılamaz; dönüşümden önce kontrol et
+            if (reportPath != null) new WriteGuard(Path.GetFullPath(src), Path.GetFullPath(flags)).CheckFile(reportPath);
             var report = ProjectProcessor.Run(options, Console.WriteLine);
             var text = report.ToText();
             Console.WriteLine();

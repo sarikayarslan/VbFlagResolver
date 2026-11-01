@@ -174,14 +174,17 @@ public static class Lexer
 
     public static bool IsIdentChar(char c) => char.IsLetterOrDigit(c) || c == '_';
 
-    private static bool LooksLikeDate(ReadOnlySpan<char> s)
-    {
-        if (s.Length == 0) return false;
-        foreach (var ch in s)
-            if (!(char.IsDigit(ch) || ch == '/' || ch == '-' || ch == ':' || ch == ' ' || ch == '.' || char.IsLetter(ch)))
-                return false;
-        return char.IsDigit(s[0]) || char.IsLetter(s[0]);
-    }
+    // #1/1/2000#, #2000-01-31 14:30:00#, #14:30#, #2:30 PM#, #Jan 1, 2000#, #1 January 2000#
+    private static readonly System.Text.RegularExpressions.Regex DateLiteral = new(
+        @"^\s*(?:(?:\d{1,4}[/\-.]\d{1,2}(?:[/\-.]\d{1,4})?|[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9},?\s+\d{2,4})" +
+        @"(?:\s+\d{1,2}(?::\d{2}){1,2}(?:\s*[AaPp][Mm])?)?|\d{1,2}(?::\d{2}){1,2}(?:\s*[AaPp][Mm])?|\d{1,2}\s*[AaPp][Mm])\s*$",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// Tarih/saat sabiti mi? Gevşek kontrol "Close #1: If x Then Close #2" satırındaki "#1: ... #" kısmını
+    /// tarih sanıyordu; bu yüzden gerçek tarih/saat biçimi aranır.
+    /// </summary>
+    private static bool LooksLikeDate(ReadOnlySpan<char> s) => DateLiteral.IsMatch(s);
 
     /// <summary>Satırdaki token'ları üst düzey ':' ayıracından ifadelere böler (yorum hariç).</summary>
     public static List<List<Token>> SplitStatements(List<Token> tokens)

@@ -5,6 +5,9 @@ Form=frmRapor.frm
 Module=mDevelopmentFlags; mDevelopmentFlags.bas
 Module=modGenel; modGenel.bas
 Module=modKosullu; modKosullu.bas
+Form=frmSiparis.frm
+Class=clsYazici; clsYazici.cls
+Module=modRapor; Moduller\modRapor.bas
 Object={831FDD16-0C5C-11D2-A9FC-0000F8754DA1}#2.0#0; MSCOMCTL.OCX
 Startup="Sub Main"
 CondComp="DEBUG_MODE = 0"

@@ -44,6 +44,14 @@ public sealed class Simplifier(FlagTable flags)
         return new SimplifyResult { Value = r.V, Residual = r.E, Changed = true, KnownFlagsUsed = _used, DroppedCalls = _dropped };
     }
 
+    /// <summary>Değeri hesaplar; Simplify'dan farklı olarak bayraksız ifadeleri de ("True Or False") değerlendirir.</summary>
+    public Tri Evaluate(Expr e)
+    {
+        _used = new(StringComparer.OrdinalIgnoreCase);
+        _dropped = [];
+        return S(e).V;
+    }
+
     private static R Known(bool v) => new(v ? Tri.True : Tri.False, new BoolLit(v));
     private static R Unk(Expr e) => new(Tri.Unknown, e);
 
@@ -104,7 +112,7 @@ public sealed class Simplifier(FlagTable flags)
     public bool IsBooleanTyped(Expr e) => e switch
     {
         BoolLit => true,
-        Ident i => flags.IsFlag(i.Name),
+        Ident i => flags.Get(i.Name) is { NonBoolean: false, Shadowed: false },
         Compare => true,
         NotExpr n => IsBooleanTyped(n.Operand),
         Paren p => IsBooleanTyped(p.Inner),

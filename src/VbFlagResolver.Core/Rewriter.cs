@@ -23,6 +23,9 @@ public sealed class Rewriter
     private FileReport _report = null!;
     private bool _changed;
     private readonly List<(string Name, int Line, string What)> _removedDecls = [];
+    /// <summary>Mantıksal satır → yordam numarası (0: modül düzeyi) ve yordam başına isim geçiş sayıları.</summary>
+    private readonly Dictionary<LogicalLine, int> _procOf = [];
+    private readonly Dictionary<int, Dictionary<string, int>> _procNames = [];
 
     private readonly CondConstants _constants;
     private readonly bool _resolveDirectives;
@@ -36,7 +39,22 @@ public sealed class Rewriter
         _resolveDirectives = resolveDirectives;
     }
 
+    /// <summary>Dosyayı dönüştürür. Beklenmeyen bir hata tüm çalışmayı durdurmaz: dosya değiştirilmeden kalır ve hatalı raporlanır.</summary>
     public RewriteResult Rewrite(VbSourceFile file, string? relativePath = null)
+    {
+        try
+        {
+            return RewriteCore(file, relativePath);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            var report = new FileReport { RelativePath = relativePath ?? Path.GetFileName(file.Path), Failed = true };
+            report.Warnings.Add(new SourceNote(report.RelativePath, 0, $"Beklenmeyen hata, dosya değiştirilmedi: {ex.GetType().Name}: {ex.Message}"));
+            return new RewriteResult { Output = file.OriginalBytes, Changed = false, Report = report, FlagReferences = new HashSet<string>() };
+        }
+    }
+
+    private RewriteResult RewriteCore(VbSourceFile file, string? relativePath)
     {
         _code = file.CodeLines;
         _report = new FileReport { RelativePath = relativePath ?? Path.GetFileName(file.Path) };
@@ -57,6 +75,7 @@ public sealed class Rewriter
         _report.Warnings.AddRange(dr.Warnings);
         _report.Changes.AddRange(dr.Changes);
         if (dr.Changed) _changed = true;
+        IndexProcedures(dr.Kept);
 
         List<Node> tree;
         try
@@ -100,7 +119,10 @@ public sealed class Rewriter
 
     private string LastEnding(ClassifiedLine c) => _code[c.Line.Start + c.Line.Count - 1].Ending;
 
-    private void Verbatim(ClassifiedLine c, List<OutputLine> o) => o.AddRange(Physical(c).Select(OutputLine.From));
+    private void Verbatim(ClassifiedLine c, List<OutputLine> o)
+    {
+        if (!c.Virtual) o.AddRange(Physical(c).Select(OutputLine.From));
+    }
 
     private void Warn(int line, string message, string? text = null)
         => _report.Warnings.Add(new SourceNote(_report.RelativePath, line, message, text));
@@ -151,6 +173,7 @@ public sealed class Rewriter
         string text = c.Line.Text;
         int n = tokens.Count - (c.Comment != null ? 1 : 0);
         int restStart = c.ThenIndex + 1;
+        while (restStart < n && tokens[restStart].Text == ":") restStart++; // "If c Then: x = 1"
 
         int elseIdx = -1;
         for (int i = restStart; i < n; i++)
@@ -174,19 +197,19 @@ public sealed class Rewriter
 
         string? newText;
         string desc;
+        int keptFrom = r.Value == Tri.True ? restStart : elseIdx + 1;
+        string? kept = r.Value == Tri.True ? thenText : elseText;
         switch (r.Value)
         {
-            case Tri.True:
-                newText = prefix + thenText + tail;
-                desc = $"If {condSrc} Then ... (tek satır) → True, Then kısmı kaldı";
+            case Tri.True or Tri.False when !string.IsNullOrWhiteSpace(kept):
+                newText = prefix + LiftedStatement(kept, tokens, keptFrom, n, prefix.Trim().Length == 0) + tail;
+                desc = r.Value == Tri.True
+                    ? $"If {condSrc} Then ... (tek satır) → True, Then kısmı kaldı"
+                    : $"If {condSrc} Then ... (tek satır) → False, Else kısmı kaldı";
                 break;
-            case Tri.False when elseText != null:
-                newText = prefix + elseText + tail;
-                desc = $"If {condSrc} Then ... (tek satır) → False, Else kısmı kaldı";
-                break;
-            case Tri.False:
+            case Tri.True or Tri.False:
                 newText = prefix.Trim().Length == 0 ? null : TrimStatementSeparator(tokens, c.KeywordIndex, prefix) + tail;
-                desc = $"If {condSrc} Then ... (tek satır) → False, silindi";
+                desc = $"If {condSrc} Then ... (tek satır) → {(r.Value == Tri.True ? "True, Then kısmı boş" : "False")}, silindi";
                 break;
             default:
                 var cond = c.ConditionTokens;
@@ -235,6 +258,12 @@ public sealed class Rewriter
                 Warn(crossing.Header.Line.LineNumber, "Blok çözülemeyen bir #If/#End If ile kesişiyor; bu If bloğu değiştirilmedi", crossing.Header.Line.Text.Trim());
                 structural = false;
             }
+            // silinecek dalda yordamın başka yerinden atlanan etiket veya kullanılan Dim/Const varsa silmek derlenmeyen kod üretir
+            else if (removed.Select(NeededElsewhere).FirstOrDefault(x => x != null) is { } need)
+            {
+                Warn(need.Line, $"Silinecek dalda {need.What} '{need.Name}' yordamın başka yerinde kullanılıyor; silinse kod derlenmezdi, bu If bloğu değiştirilmedi");
+                structural = false;
+            }
         }
 
         if (!structural)
@@ -265,7 +294,12 @@ public sealed class Rewriter
             _report.Changes.Add(new ChangeRecord(first.Line.LineNumber, ChangeKind.BlockLifted, $"If {condSrc} → {which} yerine kondu"));
             var body = new List<OutputLine>();
             EmitNodes(b.Body, body);
-            o.AddRange(Dedent(body, IndentDelta(b)));
+            // kalkan If/ElseIf/Else/End If satırlarındaki yorumlar kaybolmasın: kendi satırlarında kalır
+            HeaderComment(first, o);
+            if (b.Header != first) HeaderComment(b.Header, o);
+            int delta = IndentDelta(b);
+            o.AddRange(Dedent(body, delta, Width(b.Header.Line.Indent) + delta));
+            HeaderComment(blk.End!, o);
             return;
         }
 
@@ -292,6 +326,29 @@ public sealed class Rewriter
             $"If {condSrc} → {detail}{(parts.Count > 0 ? ": " + string.Join(" / ", parts) : "")}"));
     }
 
+    // ayrılmış deyim sözcükleri etiket olamaz ("Close:" etiket değildir); bunlara "Call" eklenmez (Call Close derlenmez)
+    private static readonly string[] ReservedStatements =
+    [
+        "End", "Stop", "Return", "Resume", "Exit", "Loop", "Next", "Wend", "Else", "Rem", "Close", "Print", "Reset", "Do",
+        "Error", "Get", "Put", "Open", "Width", "Line", "Input", "Write", "Lock", "Unlock", "Seek", "Name", "Erase", "Set",
+        "Let", "Dim", "ReDim", "On", "GoTo", "GoSub", "With", "For", "While", "Select", "Case", "Call", "RaiseEvent",
+        "Static", "Const", "Mid", "LSet", "RSet", "Date", "Time", "Option", "Private", "Public", "Global", "Event", "Implements",
+    ];
+
+    /// <summary>
+    /// Tek satırlık If'ten kalan ifade satır başına gelince anlamı değişmesin: "100" (örtük GoTo) → "GoTo 100",
+    /// "Init: x = 1" (Init çağrısı) → "Call Init: x = 1"; yoksa Init etikete dönüşür.
+    /// </summary>
+    private static string LiftedStatement(string kept, List<Token> tokens, int from, int to, bool atLineStart)
+    {
+        if (from >= to) return kept;
+        if (tokens[from].Kind == TokenKind.Number) return "GoTo " + kept;
+        if (atLineStart && from + 1 < to && tokens[from].Kind == TokenKind.Identifier && tokens[from + 1].Text == ":"
+            && !ReservedStatements.Any(tokens[from].Is))
+            return "Call " + kept;
+        return kept;
+    }
+
     /// <summary>"x = 1: " → "x = 1". Tek tanımlayıcı + ':' bir etikettir ("Hata:"), korunur.</summary>
     private static string TrimStatementSeparator(List<Token> tokens, int ifIndex, string prefix)
     {
@@ -299,6 +356,12 @@ public sealed class Rewriter
         bool isLabel = ifIndex == 2 && tokens[0].Kind == TokenKind.Identifier || ifIndex == 1;
         if (!isLabel && p.EndsWith(':')) p = p[..^1].TrimEnd();
         return p;
+    }
+
+    private void HeaderComment(ClassifiedLine h, List<OutputLine> o)
+    {
+        if (h.Comment is { } c)
+            o.Add(new OutputLine { Text = h.Line.Indent + h.Line.Text[c.Start..].TrimEnd(), Ending = LastEnding(h) });
     }
 
     private static IEnumerable<ClassifiedLine> BranchLines(Branch b)
@@ -350,11 +413,18 @@ public sealed class Rewriter
 
     // ---------------------------------------------------------------- girinti
 
-    /// <summary>Dal gövdesinin, başlık satırına göre fazladan girintisi.</summary>
+    /// <summary>Girinti genişliği (sekme 4 sütun, VB IDE varsayılanı).</summary>
+    private static int Width(string indent)
+    {
+        int w = 0;
+        foreach (char ch in indent) w = ch == '\t' ? (w / 4 + 1) * 4 : w + 1;
+        return w;
+    }
+
+    /// <summary>Dal gövdesinin, başlık satırına göre fazladan girintisi (sütun).</summary>
     private static int IndentDelta(Branch b)
     {
-        int header = b.Header.Line.Indent.Length;
-        int min = int.MaxValue;
+        int header = Width(b.Header.Line.Indent);
         foreach (var node in b.Body)
         {
             var line = node is IfBlock blk ? blk.Branches[0].Header : ((LineNode)node).Line;
@@ -362,20 +432,38 @@ public sealed class Rewriter
             if (toks.Count == 0 || toks[0].Kind == TokenKind.Comment || toks[0].Kind == TokenKind.Number
                 || toks[0].Kind == TokenKind.Directive || toks.Count > 1 && toks[0].Kind == TokenKind.Identifier && toks[1].Text == ":")
                 continue;
-            min = Math.Min(min, line.Line.Indent.Length);
+            // ölçü, başlıktan derin ilk kod satırıdır; sonraki hatalı girintili satırlar (yarım seviye) ölçüyü bozmasın
+            int width = Width(line.Line.Indent);
+            if (width > header) return width - header;
         }
-        return min == int.MaxValue ? 0 : Math.Max(0, min - header);
+        return 0;
     }
 
-    public static List<OutputLine> Dedent(List<OutputLine> lines, int delta)
+    /// <summary>
+    /// En az <paramref name="minWidth"/> sütun girintili satırlardan baştaki boşlukları tam <paramref name="delta"/> sütun
+    /// kaldırır; daha az girintili satırlar (hatalı girinti, yorum) olduğu gibi kalır.
+    /// </summary>
+    public static List<OutputLine> Dedent(List<OutputLine> lines, int delta, int minWidth = 0)
     {
         if (delta <= 0) return lines;
         var result = new List<OutputLine>(lines.Count);
         foreach (var l in lines)
         {
             string t = l.Text;
-            int w = 0;
-            while (w < t.Length && w < delta && (t[w] == ' ' || t[w] == '\t')) w++;
+            int lead = 0;
+            while (lead < t.Length && (t[lead] == ' ' || t[lead] == '\t')) lead++;
+            int w = 0, col = 0;
+            if (Width(t[..lead]) >= Math.Max(minWidth, delta))
+            {
+                while (w < lead && col < delta)
+                {
+                    int next = t[w] == '\t' ? (col / 4 + 1) * 4 : col + 1;
+                    if (next > delta) break;
+                    col = next;
+                    w++;
+                }
+                if (col != delta) w = 0; // sekme ortasına denk geliyor: dokunma
+            }
             if (w == 0 || t.Trim().Length == 0)
             {
                 result.Add(l);
@@ -391,6 +479,20 @@ public sealed class Rewriter
 
     private void CollectRemoved(Branch b)
     {
+        _removedDecls.AddRange(Declarations(b));
+        foreach (var line in b.Body.SelectMany(BlockParser.AllLines))
+        {
+            var toks = line.Tokens;
+            int k = toks.Count > 0 && toks[0].Kind == TokenKind.Number ? 1 : toks.Count > 1 && toks[0].Kind == TokenKind.Identifier && toks[1].Text == ":" ? 2 : 0;
+            if (k >= toks.Count) continue;
+            if (Lexer.SplitStatements(toks.GetRange(k, toks.Count - k)).Any(s => s.Count > 1 && s[0].Is("On") && s[1].Is("Error")))
+                Warn(line.Line.LineNumber, "Silinen blokta On Error ifadesi var; hata yakalama davranışı değişebilir", line.Line.Text.Trim());
+        }
+    }
+
+    /// <summary>Daldaki etiketler ve Dim/Static/ReDim/Const bildirimleri.</summary>
+    private static IEnumerable<(string Name, int Line, string What)> Declarations(Branch b)
+    {
         foreach (var line in b.Body.SelectMany(BlockParser.AllLines))
         {
             var toks = line.Tokens;
@@ -399,30 +501,80 @@ public sealed class Rewriter
             int k = 0;
             if (toks[0].Kind == TokenKind.Number)
             {
-                _removedDecls.Add((toks[0].Text, lineNo, "satır numarası etiketi"));
+                yield return (toks[0].Text, lineNo, "satır numarası etiketi");
                 k = 1;
             }
             else if (toks.Count > 1 && toks[0].Kind == TokenKind.Identifier && toks[1].Text == ":" && !toks[0].Is("Else"))
             {
-                _removedDecls.Add((toks[0].Text, lineNo, "etiket"));
+                yield return (toks[0].Text, lineNo, "etiket");
                 k = 2;
             }
             if (k >= toks.Count) continue;
             foreach (var stmt in Lexer.SplitStatements(toks.GetRange(k, toks.Count - k)))
             {
-                if (stmt.Count == 0) continue;
-                if (stmt[0].Is("Dim") || stmt[0].Is("Static") || stmt[0].Is("ReDim"))
-                {
-                    int s = stmt.Count > 1 && stmt[1].Is("Preserve") ? 2 : 1;
-                    foreach (var decl in FlagReader.SplitTopLevel(stmt, s, ","))
-                        if (decl.Count > 0 && decl[0].Kind == TokenKind.Identifier)
-                            _removedDecls.Add((decl[0].Text, lineNo, stmt[0].Text + " bildirimi"));
-                }
-                else if (stmt[0].Is("On") && stmt.Count > 1 && stmt[1].Is("Error"))
-                {
-                    Warn(lineNo, "Silinen blokta On Error ifadesi var; hata yakalama davranışı değişebilir", line.Line.Text.Trim());
-                }
+                if (stmt.Count == 0 || !(stmt[0].Is("Dim") || stmt[0].Is("Static") || stmt[0].Is("ReDim") || stmt[0].Is("Const"))) continue;
+                int s = stmt.Count > 1 && stmt[1].Is("Preserve") ? 2 : 1;
+                foreach (var decl in FlagReader.SplitTopLevel(stmt, s, ","))
+                    if (decl.Count > 0 && decl[0].Kind == TokenKind.Identifier)
+                        yield return (decl[0].Text, lineNo, stmt[0].Text + " bildirimi");
             }
+        }
+    }
+
+    /// <summary>
+    /// Daldaki bir etiket/Dim/Const yordamın dal dışındaki bir satırında da geçiyor mu? (GoTo hedefi, değişken kullanımı)
+    /// ReDim çoğunlukla başka yerde bildirilmiş diziyi boyutlandırır; bildirim sayılmaz.
+    /// </summary>
+    private (string Name, int Line, string What)? NeededElsewhere(Branch b)
+    {
+        if (!_procOf.TryGetValue(b.Header.Line, out int proc) || !_procNames.TryGetValue(proc, out var total)) return null;
+        var inBranch = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var l in BranchLines(b))
+            CountNames(l.Tokens, inBranch);
+        foreach (var d in Declarations(b))
+            if (!d.What.StartsWith("ReDim", StringComparison.OrdinalIgnoreCase)
+                && total.GetValueOrDefault(d.Name) > inBranch.GetValueOrDefault(d.Name))
+                return d;
+        return null;
+    }
+
+    private static readonly string[] ProcScopes = ["Public", "Private", "Friend", "Static", "Global"];
+
+    /// <summary>
+    /// İsim geçişlerini sayar. Sayılar yalnızca satır numarası etiketi olarak geçtiğinde sayılır: satır başında (tanım)
+    /// veya GoTo/GoSub/Resume/Then/Else ya da "On x GoTo a, b" listesinden sonra (kullanım); "y = 100" sayılmaz.
+    /// </summary>
+    private static void CountNames(List<Token> t, Dictionary<string, int> names)
+    {
+        bool inJumpList = false;
+        for (int i = 0; i < t.Count; i++)
+        {
+            var tok = t[i];
+            if (tok.Is("GoTo") || tok.Is("GoSub")) inJumpList = true;
+            else if (tok.Text == ":" || tok.Kind == TokenKind.Comment) inJumpList = false;
+            bool count = tok.Kind == TokenKind.Identifier
+                || tok.Kind == TokenKind.Number && (i == 0 || inJumpList && (t[i - 1].Is("GoTo") || t[i - 1].Is("GoSub") || t[i - 1].Text == ",")
+                    || t[i - 1].Is("Resume") || t[i - 1].Is("Then") || t[i - 1].Is("Else"));
+            if (count) names[tok.Text] = names.GetValueOrDefault(tok.Text) + 1;
+        }
+    }
+
+    /// <summary>Her mantıksal satırın hangi yordamda olduğunu ve yordam başına isim geçişlerini çıkarır.</summary>
+    private void IndexProcedures(IReadOnlyList<LogicalLine> lines)
+    {
+        _procOf.Clear();
+        _procNames.Clear();
+        int proc = 0, next = 0;
+        foreach (var l in lines)
+        {
+            var t = l.Tokens;
+            int k = 0;
+            while (k < t.Count && ProcScopes.Any(t[k].Is)) k++;
+            if (k < t.Count && (t[k].Is("Sub") || t[k].Is("Function") || t[k].Is("Property"))) proc = ++next;
+            _procOf[l] = proc;
+            if (!_procNames.TryGetValue(proc, out var names)) _procNames[proc] = names = new(StringComparer.OrdinalIgnoreCase);
+            CountNames(t, names);
+            if (t.Count > 1 && t[0].Is("End") && (t[1].Is("Sub") || t[1].Is("Function") || t[1].Is("Property"))) proc = 0;
         }
     }
 
@@ -430,12 +582,20 @@ public sealed class Rewriter
     {
         if (_removedDecls.Count == 0) return;
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var declared = new HashSet<string>(StringComparer.OrdinalIgnoreCase); // kalan kodda Dim/Private/... ile bildirilenler
         foreach (var l in output)
-        foreach (var t in Lexer.Tokenize(l.Text))
-            if (t.Kind is TokenKind.Identifier or TokenKind.Number)
-                names.Add(t.Text);
+        {
+            var toks = Lexer.Tokenize(l.Text);
+            foreach (var t in toks)
+                if (t.Kind is TokenKind.Identifier or TokenKind.Number)
+                    names.Add(t.Text);
+            if (toks.Count > 1 && (toks[0].Is("Dim") || toks[0].Is("Private") || toks[0].Is("Public") || toks[0].Is("Static") || toks[0].Is("Global")))
+                foreach (var t in toks.Skip(1))
+                    if (t.Kind == TokenKind.Identifier) declared.Add(t.Text);
+        }
         foreach (var (name, line, what) in _removedDecls)
-            if (names.Contains(name))
+            // ReDim, başka yerde bildirilmiş diziyi yeniden boyutlandırıyorsa bildirim değildir
+            if (names.Contains(name) && !(what.StartsWith("ReDim", StringComparison.OrdinalIgnoreCase) && declared.Contains(name)))
                 Warn(line, $"Silinen blokta {what} '{name}' var ve dosyanın başka yerinde kullanılıyor");
     }
 }

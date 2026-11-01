@@ -29,11 +29,11 @@ public static class ProjectProcessor
         if (!File.Exists(flagsPath)) throw new FileNotFoundException($"Bayrak dosyası bulunamadı: {flagsPath}");
 
         string? outDir = o.OutputDir == null ? null : Path.GetFullPath(o.OutputDir);
+        var guard = new WriteGuard(src, flagsPath);
         if (!o.DryRun)
         {
             if (outDir == null) throw new ArgumentException("--out gerekli (veya --dry-run kullanın)");
-            if (SamePath(outDir, src) || IsUnder(src, outDir))
-                throw new ArgumentException("Çıktı klasörü kaynak klasörle aynı veya onun üst klasörü olamaz; orijinal dosyalara yazılmaz.");
+            guard.CheckOutputDir(outDir);
         }
 
         var report = new Report { FlagsFile = flagsPath, SourceDir = src, OutputDir = outDir, DryRun = o.DryRun };
@@ -89,6 +89,12 @@ public static class ProjectProcessor
             ScanAssignments(file, rel, flagResult.Flags, moduleNames, report, active);
             if (procNames.Count > 0) report.ProcedureCalls.AddRange(ScanProcedureCalls(file, rel, procNames, moduleNames, active));
         }
+        // çalıştırıldığı varsayılan ama projede hiç çağrılmayan bayrak yordamları
+        foreach (var p in flagResult.Procedures.Where(p => p.IsRoot && p.AssignsFlags))
+            if (!report.ProcedureCalls.Any(c => c.Procedure.Equals(p.Name, StringComparison.OrdinalIgnoreCase)))
+                report.FlagNotes.Add(new SourceNote(Path.GetFileName(flagsPath), p.Line,
+                    $"{p.Name} çalıştırılmış sayıldı ama projede çağrıldığı yer bulunamadı; hiç çalışmıyorsa atadığı bayraklar " +
+                    "False (VB varsayılanı) kalır. Bu durumda 'Çağrı sırası'na (--init-proc) yalnızca çalışan yordamları yazın"));
 
         // 4) dönüşüm
         var outputs = new List<(string Rel, byte[] Bytes)>();
@@ -109,19 +115,18 @@ public static class ProjectProcessor
         foreach (var f in others) report.CopiedFiles.Add(Path.GetRelativePath(src, f));
         if (!o.DryRun)
         {
-            foreach (var (rel, bytes) in outputs) Write(outDir!, src, rel, bytes);
+            foreach (var (rel, bytes) in outputs) Write(guard, outDir!, rel, bytes);
             // bayrak dosyası kaynak klasördeyse "others" içindedir ve aynen kopyalanır
             if (o.CopyOtherFiles)
-                foreach (var f in others) Write(outDir!, src, Path.GetRelativePath(src, f), File.ReadAllBytes(f));
+                foreach (var f in others) Write(guard, outDir!, Path.GetRelativePath(src, f), File.ReadAllBytes(f));
         }
         return report;
     }
 
-    private static void Write(string outDir, string src, string rel, byte[] bytes)
+    private static void Write(WriteGuard guard, string outDir, string rel, byte[] bytes)
     {
         var target = Path.GetFullPath(Path.Combine(outDir, rel));
-        if (IsUnder(target, src) && !IsUnder(target, outDir))
-            throw new InvalidOperationException($"Güvenlik: kaynak klasöre yazma girişimi engellendi: {target}");
+        guard.CheckFile(target); // yoldaki var olan junction/symlink'ler çözülür; olmayan klasörler bağlantı olamaz
         Directory.CreateDirectory(Path.GetDirectoryName(target)!);
         File.WriteAllBytes(target, bytes);
     }
@@ -130,7 +135,7 @@ public static class ProjectProcessor
         => string.Equals(Path.GetFullPath(a).TrimEnd('\\', '/'), Path.GetFullPath(b).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase);
 
     /// <summary>path, dir'in içinde mi (aynısı dahil)?</summary>
-    private static bool IsUnder(string path, string dir)
+    internal static bool IsUnder(string path, string dir)
     {
         var p = Path.GetFullPath(path).TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
         var d = Path.GetFullPath(dir).TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
@@ -145,11 +150,55 @@ public static class ProjectProcessor
     public static void ScanAssignments(VbSourceFile file, string rel, FlagTable flags, ISet<string> moduleNames, Report report,
         IReadOnlyList<LogicalLine>? lines = null)
     {
+        var privateReported = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        static bool IsPrivate(FlagInfo f) => f.Scope == null ? f.Kind == FlagKind.Const
+            : f.Scope.Equals("Private", StringComparison.OrdinalIgnoreCase) || f.Scope.Equals("Dim", StringComparison.OrdinalIgnoreCase);
+
+        void Shadow(Token t, LogicalLine line, string what, bool otherType = true)
+        {
+            if (t.Kind != TokenKind.Identifier || !flags.IsFlag(t.Text)) return;
+            var flag = flags.Get(t.Text)!;
+            var name = flag.Name;
+            if (otherType) flag.Shadowed = true;
+            flags.MarkUnknown(name, $"{rel}:{line.LineNumber} {what}");
+            report.FlagAssignments.Add(new SourceNote(rel, line.LineNumber, $"{name}: {what}", line.Text.Trim()));
+        }
+
         foreach (var line in lines ?? file.GetLogicalLines())
         {
             var toks = line.Tokens;
             int n = toks.Count - (Lexer.Comment(toks) != null ? 1 : 0);
             if (n == 0) continue;
+
+            // yordam başı: aynı isimde parametre yordam içinde bayrağı gölgeler
+            int h = 0;
+            while (h < n && (DeclWords.Any(toks[h].Is) || toks[h].Is("Friend"))) h++;
+            if (h < n && (toks[h].Is("Sub") || toks[h].Is("Function") || toks[h].Is("Property")))
+            {
+                int open = toks.FindIndex(h, n - h, t => t.Text == "(");
+                if (open >= 0)
+                {
+                    int close = open, depth = 0;
+                    for (; close < n; close++)
+                    {
+                        if (toks[close].Text == "(") depth++;
+                        else if (toks[close].Text == ")" && --depth == 0) break;
+                    }
+                    foreach (var p in FlagReader.SplitTopLevel(toks.GetRange(0, Math.Min(close, n)), open + 1, ","))
+                    {
+                        int q = 0;
+                        while (q < p.Count && (p[q].Is("Optional") || p[q].Is("ByVal") || p[q].Is("ByRef") || p[q].Is("ParamArray"))) q++;
+                        if (q < p.Count) Shadow(p[q], line, "aynı isimde parametre (gölgeleme)");
+                    }
+                }
+                // başlıktan sonra ':' ile gelen ifadeler ("Sub X(): A = True") aşağıda normal taranır
+            }
+
+            // Private bayrak (Private/Dim/kapsamsız Const) başka modülden erişilemez: orada adı başka bir şeydir
+            foreach (var t in toks.Take(n))
+                if (t.Kind == TokenKind.Identifier && flags.Get(t.Text) is { } pf && IsPrivate(pf) && privateReported.Add(pf.Name))
+                    Shadow(t, line, "Private bayrak başka modülden kullanılıyor (VB'de erişilemez)");
+
             foreach (int s0 in StatementStarts(toks, n))
             {
                 int s = s0;
@@ -165,11 +214,16 @@ public static class ProjectProcessor
                     var stmt = toks.GetRange(0, n);
                     foreach (var decl in FlagReader.SplitTopLevel(stmt, k, ","))
                     {
-                        if (decl.Count == 0 || decl[0].Kind != TokenKind.Identifier || !flags.IsFlag(decl[0].Text)) continue;
-                        var name = flags.Get(decl[0].Text)!.Name;
-                        flags.MarkUnknown(name, $"{rel}:{line.LineNumber} aynı isimde bildirim (gölgeleme)");
-                        report.FlagAssignments.Add(new SourceNote(rel, line.LineNumber, $"{name} aynı isimle yeniden bildiriliyor", line.Text.Trim()));
+                        if (decl.Count == 0) continue;
+                        Shadow(decl[0], line, "aynı isimle yeniden bildiriliyor (gölgeleme)");
                     }
+                    continue;
+                }
+                if (toks[s].Is("For"))
+                {
+                    // For X = ... / For Each X In ...: döngü değişkenine atama
+                    int v = s + 1 < n && toks[s + 1].Is("Each") ? s + 2 : s + 1;
+                    if (v < n) Shadow(toks[v], line, "döngü değişkeni olarak atanıyor", otherType: false);
                     continue;
                 }
                 if (toks[s].Is("Let") || toks[s].Is("Set")) s++;

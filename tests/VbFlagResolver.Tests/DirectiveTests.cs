@@ -33,6 +33,11 @@ public class DirectiveTests
     [InlineData("B And C", false)]    // 0 And x = 0
     [InlineData("False", false)]
     [InlineData("A Xor 1", false)]
+    [InlineData("&HFFFF = -1", true)]          // VB: işaretli Integer
+    [InlineData("&HFFFF& = 65535", true)]      // & eki: Long
+    [InlineData("&H8000 < 0", true)]
+    [InlineData("&HFFFFFFFF = -1", true)]      // Long
+    [InlineData("&O177777 = -1", true)]
     public void Evaluates_conditions(string expr, bool expected)
         => Assert.Equal(expected, Eval(expr, out _));
 
@@ -45,6 +50,22 @@ public class DirectiveTests
     {
         Assert.Null(Eval(expr, out var undefined));
         if (undefinedName != null) Assert.Contains(undefinedName, undefined);
+    }
+
+    [Theory]
+    [InlineData("&HFFFFFFFFFFFFFFFFF")]   // 64 bitten büyük: çökme yerine bilinmiyor
+    [InlineData("&H100000000 = 0")]       // 32 bitten büyük: VB'de derlenmez
+    public void Too_large_literals_give_unknown(string expr)
+        => Assert.Null(Eval(expr, out _));
+
+    [Fact]
+    public void Invalid_user_defines_are_reported()
+    {
+        Assert.Equal(["X", "=1"], CondConstants.InvalidEntries("A=1, X, =1, B = True"));
+        var notes = new List<SourceNote>();
+        var c = CondConstants.FromProject(null, "A=1, X", notes);
+        Assert.True(c.TryGet("A", out _));
+        Assert.Contains(notes, n => n.Message.Contains("'X'"));
     }
 
     [Fact]

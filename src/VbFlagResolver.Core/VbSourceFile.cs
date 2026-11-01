@@ -105,6 +105,9 @@ public sealed class VbSourceFile
             var lineBytes = bytes[start..];
             result.Add(new PhysicalLine { Text = enc.GetString(lineBytes), Ending = "", Bytes = lineBytes, Number = number });
         }
+        // UTF-8 BOM (Notepad ekleyebilir): baytlarda kalır, metinden çıkarılır; yoksa ilk satır tanınmaz
+        if (result.Count > 0 && bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF)
+            result[0] = new PhysicalLine { Text = enc.GetString(result[0].Bytes[3..]), Ending = result[0].Ending, Bytes = result[0].Bytes, Number = 1 };
         return result;
     }
 

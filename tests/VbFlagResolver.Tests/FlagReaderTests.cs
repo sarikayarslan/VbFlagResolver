@@ -30,6 +30,17 @@ public class FlagReaderTests
     [InlineData("gbflagdebugpanel", true)]
     [InlineData("gbFlagHicAtanmamis", false)]      // atanmamış → VB varsayılanı False
     [InlineData("gbFlagCalismaZamani", false)]     // dosya tek başına okunduğunda False
+    [InlineData("FLAG_HEX_ACIK", true)]            // As Boolean = &HFFFF (-1)
+    [InlineData("FLAG_KARMA", false)]              // (A Or B) And Not (X Xor Y)
+    [InlineData("FLAG_ESIT", true)]                // FLAG_A = FLAG_C
+    [InlineData("FLAG_DEVAM", true)]               // True And _ Not False
+    [InlineData("FLAG_SIPARIS_V2", true)]
+    [InlineData("FLAG_ESKI_FIYAT", false)]
+    [InlineData("FLAG_STOK_UYARI", true)]
+    [InlineData("gbFlagYardimci", true)]           // modül içi çağrıdan
+    [InlineData("gbFlagSonradanAcik", true)]       // koşullu atamadan sonra koşulsuz atama
+    [InlineData("gbFlagModulAdli", true)]          // mDevelopmentFlags.X = True
+    [InlineData("gbFlagCikisSonrasi", true)]       // On Error GoTo, Exit Sub'dan önce
     public void Reads_all_definition_styles(string name, bool expected)
     {
         var r = ReadSample();
@@ -37,11 +48,25 @@ public class FlagReaderTests
         Assert.Equal(expected, v);
     }
 
+    [Theory]
+    [InlineData("gbFlagRaporV3")]       // tek satırlık If içinde False
+    [InlineData("gbFlagKomutSatiri")]   // tek satırlık If'te ':' sonrası
+    [InlineData("gbFlagHataYolu")]      // hata bölümünde False
+    [InlineData("gbFlagAtlamali")]      // GoTo ile atlanabilen atama
+    [InlineData("SEVIYE")]              // True And 3 = 3: Boolean değil
+    [InlineData("ArslanFlag")]          // birbirini çağırmayan iki yordam farklı değer veriyor
+    public void Sample_unknown_flags(string name)
+    {
+        var r = ReadSample();
+        Assert.True(r.Flags.IsFlag(name));
+        Assert.False(r.Flags.TryGetKnown(name, out _), $"{name} bilinmiyor olmalı");
+    }
+
     [Fact]
     public void Reports_unrecognized_lines_and_skips_them()
     {
         var r = ReadSample();
-        Assert.Equal(23, r.Flags.Count);
+        Assert.Equal(41, r.Flags.Count);
         Assert.Equal("mDevelopmentFlags", r.ModuleName);
         Assert.Contains(r.Unrecognized, u => u.Text!.Contains("APP_VERSION"));
         Assert.Contains(r.Unrecognized, u => u.Text!.Contains("MAX_KAYIT"));
@@ -362,6 +387,220 @@ public class FlagReaderTests
         Assert.Null(Value(r, "gbA"));
         Assert.Contains("yordam dışında", r.Flags.Get("gbA")!.UnknownReason);
         Assert.Contains(r.Notes, n => n.Line == 6 && n.Message.Contains("derlemez"));
+    }
+
+    [Theory]
+    [InlineData("If Command$ = \"\" Then gbA = False", null)]          // tek satırlık If: koşullu
+    [InlineData("If x Then y = 1: gbA = False", null)]                  // ':' sonrası da If'e ait
+    [InlineData("If x Then y = 1 Else gbA = False", null)]
+    [InlineData("If x Then mFlags.gbA = False", null)]
+    [InlineData("If x Then y = 1", true)]                               // bayrak ataması yok
+    public void Single_line_if_assignment_is_conditional(string line, bool? expected)
+    {
+        var r = ReadText($"""
+            Attribute VB_Name = "mFlags"
+            Public gbA As Boolean
+            Public gbB As Boolean
+            Sub InitFlags()
+                gbA = True
+                {line}
+                gbB = True
+            End Sub
+            """);
+        Assert.Equal(expected, Value(r, "gbA"));
+        Assert.True(Value(r, "gbB"));
+        if (expected == null) Assert.Contains("tek satırlık If", r.Flags.Get("gbA")!.UnknownReason);
+    }
+
+    [Fact]
+    public void Unconditional_assignment_after_single_line_if_wins()
+    {
+        var r = ReadText("""
+            Public gbA As Boolean
+            Sub InitFlags()
+                If x Then gbA = False
+                gbA = True
+            End Sub
+            """);
+        Assert.True(Value(r, "gbA"));
+    }
+
+    [Fact]
+    public void Module_qualified_assignment_in_flags_module_is_read()
+    {
+        var r = ReadText("""
+            Attribute VB_Name = "mFlags"
+            Public gbA As Boolean
+            Sub InitFlags()
+                gbA = False
+                mFlags.gbA = True
+            End Sub
+            """);
+        Assert.True(Value(r, "gbA"));
+    }
+
+    [Theory]
+    [InlineData("GoTo Son")]
+    [InlineData("If x Then GoTo Son")]
+    [InlineData("GoSub Son")]
+    public void GoTo_in_procedure_makes_assignments_unknown(string jump)
+    {
+        var r = ReadText($"""
+            Public gbA As Boolean
+            Sub InitFlags()
+                gbA = True
+                {jump}
+                gbA = False
+            Son:
+            End Sub
+            """);
+        Assert.Null(Value(r, "gbA"));
+        Assert.Contains("GoTo", r.Flags.Get("gbA")!.UnknownReason);
+    }
+
+    [Fact]
+    public void Error_handler_after_exit_sub_is_reachable()
+    {
+        var r = ReadText("""
+            Public gbA As Boolean
+            Public gbB As Boolean
+            Sub InitFlags()
+                On Error GoTo Hata
+                gbA = True
+                gbB = True
+                Exit Sub
+            Hata:
+                gbA = False
+            End Sub
+            """);
+        Assert.Null(Value(r, "gbA"));   // hata olursa False
+        Assert.True(Value(r, "gbB"));
+    }
+
+    [Fact]
+    public void Line_numbers_labels_and_then_colon_in_init_procedure()
+    {
+        var r = ReadText("""
+            Public gbA As Boolean
+            Public gbB As Boolean
+            Public gbC As Boolean
+            Public gbD As Boolean
+            Public gbE As Boolean
+            Sub InitFlags()
+            10  gbA = True
+            DigerYordam: gbB = True
+                If x Then: gbC = True
+                gbD = True
+            End Sub
+            Sub DigerYordam()
+                gbE = True
+            End Sub
+            """, new FlagReaderOptions { InitProcedures = ["InitFlags"] });
+        Assert.True(Value(r, "gbA"));    // satır numaralı atama okunur
+        Assert.True(Value(r, "gbB"));
+        Assert.Null(Value(r, "gbE"));    // "DigerYordam:" etikettir, çağrı değil: DigerYordam çalışmadı
+        Assert.Null(Value(r, "gbC"));    // "If x Then: ..." tek satırlık If
+        Assert.True(Value(r, "gbD"));    // tek satırlık If blok derinliğini bozmaz
+    }
+
+    [Fact]
+    public void Error_handler_makes_assignments_after_faultable_lines_unknown()
+    {
+        var r = ReadText("""
+            Public gbA As Boolean
+            Public gbB As Boolean
+            Sub InitFlags()
+                On Error GoTo Hata
+                gbA = True
+                AyarlariYukle
+                gbB = True
+                Exit Sub
+            Hata:
+            End Sub
+            """);
+        Assert.True(Value(r, "gbA"));   // hata verebilecek satırdan önce
+        Assert.Null(Value(r, "gbB"));   // AyarlariYukle hata verirse atlanır
+    }
+
+    [Fact]
+    public void Line_numbered_single_line_if_keeps_colon_part_conditional()
+    {
+        var r = ReadText("Public gbA As Boolean\r\nSub InitFlags()\r\n10  If c Then gbA = False: gbA = True\r\nEnd Sub\r\n");
+        Assert.Null(Value(r, "gbA"));
+    }
+
+    [Fact]
+    public void Callee_error_jumps_to_caller_handler()
+    {
+        var r = ReadText("""
+            Public gbA As Boolean
+            Public gbB As Boolean
+            Sub InitFlags()
+                On Error GoTo H
+                AltYordam
+                Exit Sub
+            H:
+            End Sub
+            Sub AltYordam()
+                gbA = True
+                x = CInt("abc")
+                gbB = True
+            End Sub
+            """, new FlagReaderOptions { InitProcedures = ["InitFlags"] });
+        Assert.True(Value(r, "gbA"));   // hata verebilecek satırdan önce
+        Assert.Null(Value(r, "gbB"));   // hata InitFlags'in yakalayıcısına atlar, bu atama çalışmaz
+    }
+
+    [Fact]
+    public void Single_line_if_with_both_branches_then_unconditional_assignment()
+    {
+        var r = ReadText("""
+            Public gbA As Boolean
+            Sub InitFlags()
+                If x Then gbA = True Else gbA = False
+                gbA = True
+            End Sub
+            """);
+        Assert.True(Value(r, "gbA"));
+    }
+
+    [Fact]
+    public void Literal_only_expressions_and_continuations_are_evaluated()
+    {
+        var r = ReadText("""
+            Public Const A = True Or _
+                False
+            Public Const B = True And False
+            Public Const C = Not (False Or False)
+            Public gbD As Boolean
+            Sub InitFlags()
+                gbD = True And _
+                    False
+            End Sub
+            """);
+        Assert.True(Value(r, "A"));
+        Assert.False(Value(r, "B"));
+        Assert.True(Value(r, "C"));
+        Assert.False(Value(r, "gbD"));
+    }
+
+    [Fact]
+    public void Utf8_bom_does_not_hide_first_line()
+    {
+        var bytes = new byte[] { 0xEF, 0xBB, 0xBF }.Concat(System.Text.Encoding.ASCII.GetBytes("Public Const A = True\r\n")).ToArray();
+        var r = FlagReader.Read(VbSourceFile.FromBytes("m.bas", bytes));
+        Assert.True(Value(r, "A"));
+        Assert.Empty(r.Unrecognized);
+    }
+
+    [Fact]
+    public void Typeless_const_with_non_boolean_value_is_not_treated_as_boolean()
+    {
+        var r = ReadText("Public Const FT As Boolean = True\r\nPublic Const LVL = True And 3\r\n");
+        Assert.True(r.Flags.Get("LVL")!.NonBoolean);
+        // LVL = 3: "LVL = True" yanlıştır; "LVL" (sıfırdan farklı) doğru olurdu, bu yüzden sadeleştirilmemeli
+        var text = TestPaths.RewriteText("Sub X()\r\n    If LVL = True And FT Then\r\n        a = 1\r\n    End If\r\nEnd Sub\r\n", r.Flags);
+        Assert.Contains("If LVL = True Then", text);
     }
 
     [Fact]

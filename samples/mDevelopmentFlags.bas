@@ -60,3 +60,58 @@ End Sub
 public sub DeleteFlags()
 	ArslanFlag = False
 End sub
+
+'==============================================================
+' Biçim 8+: zor ilk deðer senaryolarý (araç testleri için)
+'==============================================================
+Public gbFlagRaporV3 As Boolean, gbFlagKomutSatiri As Boolean
+Public gbFlagYardimci As Boolean, gbFlagSonradanAcik As Boolean
+Public gbFlagModulAdli As Boolean, gbFlagHataYolu As Boolean
+Public gbFlagAtlamali As Boolean, gbFlagCikisSonrasi As Boolean
+
+Public Const FLAG_HEX_ACIK As Boolean = &HFFFF          ' VB'de -1 = True
+Public Const FLAG_KARMA = (FLAG_A Or FLAG_B) And Not (FLAG_X Xor FLAG_Y)  ' True And Not True = False
+Public Const FLAG_ESIT = FLAG_A = FLAG_C                ' True = True -> True
+Public Const FLAG_DEVAM = True And _
+                          Not False                     ' satýr devamý: True
+Public Const FLAG_GOLGE = True                          ' frmSiparis'te parametre adý -> Bilinmiyor
+Public Const SEVIYE = True And 3                        ' Boolean deðil (3)
+Public Const FLAG_SIPARIS_V2 = True, FLAG_ESKI_FIYAT = False, FLAG_STOK_UYARI As Boolean = True
+
+#If DEBUG_MODE Then
+Public Const FLAG_DEBUG_ARAYUZ = True
+#Else
+Public Const FLAG_DEBUG_ARAYUZ = False
+#End If
+
+Public Sub InitGelismis()
+    gbFlagRaporV3 = True
+    YardimciAyarla                                      ' modül içi çaðrý: yerinde izlenir
+    If Command$ = "/dev" Then gbFlagKomutSatiri = True: gbFlagRaporV3 = False
+    gbFlagSonradanAcik = False
+    If Len(Command$) > 0 Then
+        gbFlagSonradanAcik = True
+    End If
+    gbFlagSonradanAcik = True                           ' koþulsuz son atama geçerli
+    mDevelopmentFlags.gbFlagModulAdli = True
+End Sub
+
+Private Sub YardimciAyarla()
+    gbFlagYardimci = True
+End Sub
+
+Public Sub InitHataYollu()
+    On Error GoTo Hata
+    gbFlagHataYolu = True
+    gbFlagCikisSonrasi = True
+    Exit Sub
+Hata:
+    gbFlagHataYolu = False
+End Sub
+
+Public Sub InitAtlamali()
+    gbFlagAtlamali = True
+    If gsKullanici = "" Then GoTo Son
+    gbFlagAtlamali = False
+Son:
+End Sub

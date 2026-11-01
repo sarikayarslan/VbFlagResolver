@@ -13,6 +13,10 @@ public sealed class FlagInfo
     public string? UnknownReason { get; set; }
     /// <summary>Değişken bayrak için: InitFlags benzeri yordamda atama yapıldı mı?</summary>
     internal bool Assigned { get; set; }
+    /// <summary>Tipsiz sabit ve değeri True/False olarak hesaplanamadı (ör. True And 3 = 3): -1/0 olduğu varsayılamaz.</summary>
+    public bool NonBoolean { get; init; }
+    /// <summary>Bir yerde aynı isimde yerel bildirim/parametre var: o kapsamda başka tipte olabilir.</summary>
+    public bool Shadowed { get; set; }
 
     // --- nasıl okunduğu (arayüz ve rapor için)
 
@@ -216,7 +220,7 @@ public static class FlagReader
                 continue;
             }
 
-            foreach (var stmt in Lexer.SplitStatements(tokens))
+            foreach (var stmt in SplitStatementsKeepingSingleIf(tokens))
             {
                 if (stmt.Count == 0) continue;
                 void Unrecognized(string why) =>
@@ -246,7 +250,16 @@ public static class FlagReader
 
                 if (currentProc != null)
                 {
-                    currentProc.Statements.Add(new BufferedStmt(stmt, line.Text, lineNo, directive));
+                    var body = stmt;
+                    if (body[0].Start == tokens[0].Start)
+                    {
+                        // satır başı etiketi ("Hata:", "100") yordam çağrısı değildir; atlama durumu ScanJumps'ta
+                        if (body.Count == 1 && body[0].Kind is TokenKind.Identifier or TokenKind.Number
+                            && (line.Text[body[0].End..].TrimStart().StartsWith(':') || body[0].Kind == TokenKind.Number))
+                            continue;
+                        if (body[0].Kind == TokenKind.Number && body.Count > 1) body = body.GetRange(1, body.Count - 1); // "10  A = True"
+                    }
+                    currentProc.Statements.Add(new BufferedStmt(body, line.Text, lineNo, directive));
                     continue;
                 }
 
@@ -359,7 +372,16 @@ public static class FlagReader
         public bool ExitedConditionally { get; set; }
         /// <summary>Bu yordam koşullu bir yerden çağrıldı.</summary>
         public bool CalledConditionally { get; init; }
-        public bool IsConditional => BlockDepth > 0 || ExitedConditionally || CalledConditionally;
+        /// <summary>Yordamda GoTo/GoSub var: hangi atamanın çalıştığı (ve sırası) bilinmez.</summary>
+        public bool HasJumps { get; init; }
+        /// <summary>On Error GoTo etiket: Exit Sub'dan sonraki hata bölümüne yine de girilebilir.</summary>
+        public bool HasErrorHandler { get; init; }
+        /// <summary>Hata verebilecek bir satır (çağrı, tanınmayan ifade) çalıştı: hata yakalayıcı varsa sonraki atamalar atlanabilir.</summary>
+        public bool MayHaveFaulted { get; set; }
+        /// <summary>Çağıran yordamlardan birinde hata yakalayıcı var: buradaki hata oraya atlar, yordamın kalanı çalışmaz.</summary>
+        public bool CallerHandler { get; init; }
+        public bool FaultSkips => (HasErrorHandler || CallerHandler) && MayHaveFaulted;
+        public bool IsConditional => BlockDepth > 0 || ExitedConditionally || CalledConditionally || HasJumps || FaultSkips;
     }
 
     /// <summary>
@@ -401,17 +423,14 @@ public static class FlagReader
         // hiçbir kökten çağrılmayan yordamlardaki atamalar: ne zaman çalıştığı bilinmez
         foreach (var b in bodies.Where(b => !ctx.Executed.Contains(b.Name)))
         foreach (var st in b.Statements)
+        foreach (var flag in AssignedFlags(st.Stmt, ctx.Table, ctx.ModuleNames))
         {
-            var stmt = st.Stmt;
-            int s = stmt[0].Is("Let") ? 1 : 0;
-            if (stmt.Count > s + 2 && stmt[s + 1].Text == "=" && ctx.Table.Get(stmt[s].Text) is { Kind: FlagKind.Variable } flag)
-            {
-                ctx.Table.MarkUnknown(flag.Name, $"{ctx.FileName}:{st.LineNo} {b.Name} içinde atanıyor (ilk değer yordamlarından çağrılmıyor)");
-                flag.Assigned = true;
-            }
+            if (flag.Kind != FlagKind.Variable) continue;
+            ctx.Table.MarkUnknown(flag.Name, $"{ctx.FileName}:{st.LineNo} {b.Name} içinde atanıyor (ilk değer yordamlarından çağrılmıyor)");
+            flag.Assigned = true;
         }
 
-        var assigning = bodies.Where(b => b.Statements.Any(st => IsFlagAssignment(st.Stmt, ctx.Table))).Select(b => b.Name).ToList();
+        var assigning = bodies.Where(b => b.Statements.Any(st => AssignedFlags(st.Stmt, ctx.Table, ctx.ModuleNames).Any())).Select(b => b.Name).ToList();
         foreach (var b in bodies)
             result.Procedures.Add(new FlagProcedure(b.Name, b.Line, assigning.Contains(b.Name),
                 roots.Contains(b), b.Statements.SelectMany(st => FindCalls(st.Stmt, ctx.Bodies)).Distinct().ToList()));
@@ -424,19 +443,22 @@ public static class FlagReader
                 "Sırayı 'Çağrı sırası' (--init-proc) ile, önce çağrılan önce olacak şekilde belirtin"));
     }
 
-    private static bool IsFlagAssignment(List<Token> stmt, FlagTable table)
+    /// <summary>İfadede atanan bayraklar: doğrudan atama veya tek satırlık If'in Then/Else kısmındaki atamalar.</summary>
+    private static IEnumerable<FlagInfo> AssignedFlags(List<Token> stmt, FlagTable table, ISet<string> moduleNames)
     {
-        int s = stmt[0].Is("Let") ? 1 : 0;
-        return stmt.Count > s + 2 && stmt[s + 1].Text == "=" && table.IsFlag(stmt[s].Text);
+        var starts = stmt[0].Is("If") ? SingleIfStatementStarts(stmt) : [0];
+        foreach (int p in starts)
+        {
+            int ni = AssignmentNameIndex(stmt, p, moduleNames);
+            if (ni >= 0 && table.Get(stmt[ni].Text) is { } f) yield return f;
+        }
     }
 
-    /// <summary>İfadedeki modül içi yordam çağrıları: "X", "Call X(...)", tek satırlık If'in Then/Else kısmı.</summary>
+    /// <summary>İfadedeki modül içi yordam çağrıları: "X", "Call X(...)", tek satırlık If'in Then/Else/':' kısmı.</summary>
     private static List<string> FindCalls(List<Token> stmt, Dictionary<string, ProcBody> bodies)
     {
         var calls = new List<string>();
-        var starts = new List<int> { 0 };
-        for (int i = 0; i < stmt.Count; i++)
-            if (stmt[i].Is("Then") || stmt[i].Is("Else")) starts.Add(i + 1);
+        var starts = stmt[0].Is("If") ? SingleIfStatementStarts(stmt) : [0];
         foreach (int s0 in starts)
         {
             int i = s0;
@@ -448,10 +470,14 @@ public static class FlagReader
         return calls;
     }
 
-    private static void Execute(ProcBody body, ExecContext ctx, bool conditional, HashSet<string> stack)
+    private static void Execute(ProcBody body, ExecContext ctx, bool conditional, HashSet<string> stack, bool callerHandler = false)
     {
         ctx.Executed.Add(body.Name);
-        var state = new ProcState(body.Name) { CalledConditionally = conditional };
+        var (jumps, handler) = ScanJumps(body);
+        var state = new ProcState(body.Name)
+        {
+            CalledConditionally = conditional, HasJumps = jumps, HasErrorHandler = handler, CallerHandler = callerHandler,
+        };
         foreach (var st in body.Statements)
         {
             var calls = FindCalls(st.Stmt, ctx.Bodies);
@@ -463,7 +489,8 @@ public static class FlagReader
                     if (state.ExitedUnconditionally) break;
                     if (stack.Contains(c)) continue; // özyineleme: bir kez izlemek yeter
                     Execute(ctx.Bodies[c], ctx, state.IsConditional || singleIf || st.Directive != null,
-                        new HashSet<string>(stack, StringComparer.OrdinalIgnoreCase) { c });
+                        new HashSet<string>(stack, StringComparer.OrdinalIgnoreCase) { c }, state.HasErrorHandler || state.CallerHandler);
+                    state.MayHaveFaulted = true; // çağrılan yordam hata verirse hata yakalayıcıya atlanır
                 }
                 if (!singleIf) continue;
             }
@@ -479,6 +506,7 @@ public static class FlagReader
         string fileName = ctx.FileName;
         void unrecognized(string why)
         {
+            proc.MayHaveFaulted = true; // bilinmeyen ifade hata verebilir
             if (!result.Unrecognized.Any(u => u.Line == lineNo && u.Message == why))
                 result.Unrecognized.Add(new SourceNote(fileName, lineNo, why, text.Trim()));
         }
@@ -492,22 +520,43 @@ public static class FlagReader
         }
         if (first.Is("Exit") && stmt.Count > 1 && (stmt[1].Is("Sub") || stmt[1].Is("Function") || stmt[1].Is("Property")))
         {
-            if (proc.BlockDepth == 0 && directive == null) proc.ExitedUnconditionally = true;
+            // etiket/hata bölümü varsa Exit'ten sonraki satırlara atlanarak yine girilebilir
+            if (proc.BlockDepth == 0 && directive == null && !proc.HasJumps && !proc.HasErrorHandler) proc.ExitedUnconditionally = true;
             else proc.ExitedConditionally = true;
             return;
         }
         if (first.Is("Exit") || first.Is("Else") || first.Is("ElseIf") || first.Is("Case")) return;
+        // etiket, On Error, GoTo/GoSub/Resume: yordamın atlama durumu (ScanJumps) zaten hesaba katıldı
+        bool isLabel = stmt.Count == 1 && first.Kind is TokenKind.Identifier or TokenKind.Number
+            && text[..first.Start].Trim().Length == 0 && text[first.End..].TrimStart().StartsWith(':');
+        if (isLabel || first.Is("On") || first.Is("GoTo") || first.Is("GoSub") || first.Is("Resume") || first.Is("Return")) return;
         if (BlockOpen.Any(first.Is))
         {
             bool singleLineIf = first.Is("If") && IsSingleLineIf(stmt);
             if (singleLineIf && stmt.Any(t => t.Is("Exit"))) proc.ExitedConditionally = true;
-            if (!singleLineIf) proc.BlockDepth++;
-            unrecognized(singleLineIf ? "Tek satırlık If (ilk değer yordamında desteklenmez)" : "Blok başlangıcı (içindeki atamalar koşullu sayılır)");
+            if (!singleLineIf)
+            {
+                proc.BlockDepth++;
+                unrecognized("Blok başlangıcı (içindeki atamalar koşullu sayılır)");
+                return;
+            }
+            // tek satırlık If: Then/Else kısmındaki bayrak atamaları koşulludur
+            bool any = false;
+            foreach (int p in SingleIfStatementStarts(stmt))
+            {
+                int ni = AssignmentNameIndex(stmt, p, ctx.ModuleNames);
+                if (ni < 0 || table.Get(stmt[ni].Text) is not { Kind: FlagKind.Variable } f) continue;
+                if (ctx.Options.Mode == FlagReadMode.ConstOnly || proc.ExitedUnconditionally) continue;
+                MarkConditional(f, $"{fileName}:{lineNo} tek satırlık If içinde atanıyor", lineNo, proc.Name, text[stmt[0].Start..stmt[^1].End], ctx);
+                any = true;
+            }
+            if (!any) unrecognized("Tek satırlık If (bayrak ataması yok; yok sayıldı)");
+            proc.MayHaveFaulted = true; // koşul veya Then kısmı hata verebilir
             return;
         }
 
-        int s = first.Is("Let") ? 1 : 0;
-        if (stmt.Count > s + 2 && stmt[s].Kind == TokenKind.Identifier && stmt[s + 1].Text == "=")
+        int s = AssignmentNameIndex(stmt, 0, ctx.ModuleNames);
+        if (s >= 0)
         {
             string name = stmt[s].Text;
             var flag = table.Get(name);
@@ -527,18 +576,16 @@ public static class FlagReader
                 string reason = directive != null ? $"{fileName}:{lineNo} #If {directive} içinde atanıyor; koşul çözülemedi"
                     : proc.BlockDepth > 0 ? $"{fileName}:{lineNo} koşullu/döngü içinde atanıyor"
                     : proc.ExitedConditionally ? $"{fileName}:{lineNo} koşullu Exit'ten sonra atanıyor"
+                    : proc.HasJumps ? $"{fileName}:{lineNo} {proc.Name} içinde GoTo/GoSub var; atama atlanabilir"
+                    : proc.FaultSkips ? $"{fileName}:{lineNo} hata yakalayıcı (On Error GoTo) var ve {proc.Name} içinde önceki bir satır hata verirse bu atama atlanır"
                     : $"{fileName}:{lineNo} koşullu çağrılan {proc.Name} içinde atanıyor";
-                bool wasClean = flag.UnknownReason == null;
-                table.MarkUnknown(flag.Name, reason);
-                // aynı zincirde sonradan koşulsuz atama gelirse bu belirsizlik kalkar
-                flag.PendingConditional = wasClean ? (chain, flag.UnknownReason!) : null;
-                RecordAssignment(flag, lineNo, proc.Name, assignText, chain);
-                flag.Assigned = true;
+                MarkConditional(flag, reason, lineNo, proc.Name, assignText, ctx);
                 return;
             }
 
             var exprTokens = stmt.GetRange(s + 2, stmt.Count - s - 2);
             bool? value = Evaluate(exprTokens, text, table, ctx.ModuleNames);
+            if (value == null) proc.MayHaveFaulted = true; // ifadede çağrı olabilir
             // aynı zincir: aynı kök yordamın çalışması veya kullanıcının verdiği çağrı sırası
             bool sameChain = flag.Assigned && flag.AssignmentChain == chain;
 
@@ -589,6 +636,18 @@ public static class FlagReader
         unrecognized("Tanınmayan yordam satırı");
     }
 
+    /// <summary>Koşullu atama: bayrak Bilinmiyor olur; aynı zincirde sonradan koşulsuz atama gelirse belirsizlik kalkar.</summary>
+    private static void MarkConditional(FlagInfo flag, string reason, int lineNo, string proc, string assignText, ExecContext ctx)
+    {
+        bool wasClean = flag.UnknownReason == null;
+        // aynı zincirde zaten bekleyen koşullu atama varsa (ör. "If c Then A = 1 Else A = 0") bekleme sürer
+        bool stillPending = flag.PendingConditional is var (chain, pr) && chain == ctx.ChainKey && flag.UnknownReason == pr;
+        ctx.Table.MarkUnknown(flag.Name, reason);
+        flag.PendingConditional = wasClean || stillPending ? (ctx.ChainKey, flag.UnknownReason!) : null;
+        RecordAssignment(flag, lineNo, proc, assignText, ctx.ChainKey);
+        flag.Assigned = true;
+    }
+
     private static string Bool(bool? v) => v switch { true => "True", false => "False", _ => "?" };
 
     /// <summary>Son atamayı kaydeder; öncekini geçmişe ekler.</summary>
@@ -600,6 +659,78 @@ public static class FlagReader
         flag.AssignmentProcedure = proc;
         flag.AssignmentText = text;
         flag.AssignmentChain = chain;
+    }
+
+    /// <summary>
+    /// SplitStatements gibi; ancak tek satırlık If'ten sonraki ':' ile ayrılmış ifadeler If'e aittir
+    /// (VB'de "If c Then A = 1: B = 2" satırında B = 2 de koşula bağlıdır), bu yüzden If ile tek ifade kalır.
+    /// </summary>
+    private static List<List<Token>> SplitStatementsKeepingSingleIf(List<Token> tokens)
+    {
+        var stmts = Lexer.SplitStatements(tokens);
+        for (int i = 0; i < stmts.Count - 1; i++)
+        {
+            // satır numarası önekli olabilir: "10  If c Then ..."
+            int ifAt = i == 0 && stmts[i].Count > 1 && stmts[i][0].Kind == TokenKind.Number ? 1 : 0;
+            if (stmts[i].Count <= ifAt || !stmts[i][ifAt].Is("If")) continue;
+            int start = tokens.IndexOf(stmts[i][0]);
+            int end = tokens.Count - (Lexer.Comment(tokens) != null ? 1 : 0);
+            // "If c Then: A = 1" de tek satırlık If'tir; bu yüzden ':' ile bölünmemiş haline bakılır
+            if (!IsSingleLineIf(tokens.GetRange(start, end - start))) continue;
+            stmts[i] = tokens.GetRange(start, end - start);
+            stmts.RemoveRange(i + 1, stmts.Count - i - 1);
+            break;
+        }
+        return stmts;
+    }
+
+    /// <summary>"[Let] [Modül.]Ad = ..." biçimindeyse Ad'ın indeksi, değilse -1.</summary>
+    private static int AssignmentNameIndex(List<Token> stmt, int start, ISet<string> moduleNames)
+    {
+        int s = start;
+        if (s < stmt.Count && stmt[s].Is("Let")) s++;
+        if (s + 2 < stmt.Count && moduleNames.Contains(stmt[s].Text) && stmt[s + 1].Text == ".") s += 2;
+        return s + 2 < stmt.Count && stmt[s].Kind == TokenKind.Identifier && stmt[s + 1].Text == "=" ? s : -1;
+    }
+
+    /// <summary>Tek satırlık If'in Then/Else/':' sonrasındaki ifade başlangıçları (parantez dışında).</summary>
+    private static IEnumerable<int> SingleIfStatementStarts(List<Token> stmt)
+    {
+        int depth = 0;
+        bool afterThen = false;
+        for (int i = 0; i < stmt.Count; i++)
+        {
+            var t = stmt[i];
+            if (t.Text == "(") depth++;
+            else if (t.Text == ")") depth--;
+            else if (depth == 0 && t.Is("Then")) { afterThen = true; yield return i + 1; }
+            else if (depth == 0 && afterThen && (t.Is("Else") || t.Text == ":")) yield return i + 1;
+        }
+    }
+
+    /// <summary>
+    /// Yordamdaki atlama türleri. GoTo/GoSub (ve "Then 100" gibi örtük GoTo, "Resume Etiket") hangi atamaların
+    /// çalıştığını belirsiz yapar; On Error GoTo ise Exit Sub'dan sonraki hata bölümüne erişim sağlar.
+    /// </summary>
+    private static (bool Jumps, bool ErrorHandler) ScanJumps(ProcBody body)
+    {
+        bool jumps = false, handler = false;
+        foreach (var st in body.Statements)
+        {
+            var t = st.Stmt;
+            for (int i = 0; i < t.Count; i++)
+            {
+                if (t[i].Is("GoTo") || t[i].Is("GoSub"))
+                {
+                    if (i >= 2 && t[i - 1].Is("Error") && t[i - 2].Is("On"))
+                        handler |= !(i + 1 < t.Count && t[i + 1].Text == "0");
+                    else jumps = true;
+                }
+                else if ((t[i].Is("Then") || t[i].Is("Else")) && i + 1 < t.Count && t[i + 1].Kind == TokenKind.Number) jumps = true;
+                else if (t[i].Is("Resume") && i + 1 < t.Count && !t[i + 1].Is("Next") && t[i + 1].Kind is TokenKind.Identifier or TokenKind.Number) jumps = true;
+            }
+        }
+        return (jumps, handler);
     }
 
     internal static bool IsSingleLineIf(List<Token> stmt)
@@ -630,10 +761,12 @@ public static class FlagReader
         }
         var exprTokens = decl.GetRange(eq + 1, decl.Count - eq - 1);
         bool? value = Evaluate(exprTokens, text, table, moduleNames);
-        if (value == null && type != null && exprTokens.Count == 1 && exprTokens[0].Kind == TokenKind.Number
-            && double.TryParse(exprTokens[0].Text.TrimEnd('%', '&', '!', '#', '@'), out var num))
+        if (value == null && type != null && exprTokens.Count is 1 or 2 && exprTokens[^1].Kind == TokenKind.Number
+            && (exprTokens.Count == 1 || exprTokens[0].Text == "-"))
         {
-            value = num != 0; // As Boolean = 1 → True
+            // As Boolean = 1 / -1 / &HFFFF → sıfırdan farklı True (&H sabitleri VB gibi işaretli yorumlanır)
+            try { value = DirectiveEvaluator.ParseNumber(exprTokens[^1].Text) != 0; }
+            catch (Exception ex) when (ex is FormatException or OverflowException) { }
         }
         if (value == null && type == null && !LooksBoolean(exprTokens, table))
         {
@@ -643,7 +776,8 @@ public static class FlagReader
         var info = new FlagInfo
         {
             Name = name, Kind = FlagKind.Const, Value = value, Line = lineNo,
-            UnknownReason = value == null ? "değeri hesaplanamadı" : null,
+            UnknownReason = value == null ? type == null ? "değeri True/False olarak hesaplanamadı (Boolean olmayabilir, ör. True And 3 = 3)" : "değeri hesaplanamadı" : null,
+            NonBoolean = value == null && type == null,
             Declaration = ctx.Declaration, Scope = ctx.Scope, TypeName = type, SharedLine = ctx.SharedLine, Continued = ctx.Continued,
             Expression = text[exprTokens[0].Start..exprTokens[^1].End],
         };
@@ -678,24 +812,13 @@ public static class FlagReader
         try
         {
             var expr = ExprParser.Parse(tokens, text, moduleNames);
-            if (expr is BoolLit b) return b.Value;
-            var r = new Simplifier(table).Simplify(expr);
-            return r.Value switch { Tri.True => true, Tri.False => false, _ => EvaluateLiteralOnly(expr) };
+            return new Simplifier(table).Evaluate(expr) switch { Tri.True => true, Tri.False => false, _ => null };
         }
         catch (ExprParseException)
         {
             return null;
         }
     }
-
-    // "Not False", "(True)" gibi bayraksız ifadeler
-    private static bool? EvaluateLiteralOnly(Expr e) => e switch
-    {
-        BoolLit b => b.Value,
-        Paren p => EvaluateLiteralOnly(p.Inner),
-        NotExpr n => EvaluateLiteralOnly(n.Operand) is bool v ? !v : null,
-        _ => null,
-    };
 
     internal static IEnumerable<List<Token>> SplitTopLevel(List<Token> tokens, int start, string sep)
     {
