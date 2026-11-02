@@ -256,6 +256,14 @@ Private Sub mnuYazdir_Click()
     End If
 End Sub
 
+' 11) içi tamamen bayraða baðlý yordam: temizlikten sonra boþ kalýr; VB IDE boþ yordamý sildiði için yorum eklenmeli
+Private Sub EskiYazdir(ByVal s As String)
+    If FLAG_ESKI_YAZICI Then
+        Printer.Print s
+        Printer.EndDoc
+    End If
+End Sub
+
 Private Function EskiKontrol() As Boolean
     EskiKontrol = True
 End Function

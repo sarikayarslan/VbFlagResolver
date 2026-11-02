@@ -99,7 +99,7 @@ public sealed class Report
         sb.AppendLine($"İşlenen dosya : {Files.Count}  (değişecek: {changed.Count}, hatalı: {Files.Count(f => f.Failed)}" +
                       $"{(kept.Count > 0 ? $", olduğu gibi aktarılan: {kept.Count}" : "")})");
         if (kept.Count > 0)
-            sb.AppendLine($"Olduğu gibi aktarılan (işaretli): {Abbrev(kept.Select(f => f.RelativePath).ToList(), 30)}");
+            sb.AppendLine($"Olduğu gibi aktarılan (temizlenmedi): {Abbrev(kept.Select(f => f.RelativePath).ToList(), 30)}");
         sb.AppendLine($"Toplam        : {Sum(ChangeKind.BlockRemoved)} blok silindi, {Sum(ChangeKind.BlockLifted)} blok açıldı, " +
                       $"{Sum(ChangeKind.BlockSimplified)} blok sadeleşti, {Sum(ChangeKind.SingleLineIf)} tek satırlık If, " +
                       $"{Sum(ChangeKind.DirectiveResolved)} #If çözüldü, " +
@@ -136,12 +136,15 @@ public sealed class Report
             sb.AppendLine("Koşullu derleme (#If): çözülmüyor (kapalı); #If içindeki bayrak tanımları/atamaları Bilinmiyor sayılır");
             return;
         }
+        string undefinedRule = Constants.UndefinedIsZero
+            ? "Tanımsız sabitler VB'deki gibi 0 (False) sayılır."
+            : "Tanımsız sabit içeren #If grupları olduğu gibi bırakılır.";
         if (Constants.Count == 0)
         {
-            sb.AppendLine("Koşullu derleme sabitleri: yok (.vbp'de CondComp bulunamadı). Tanımsız sabit içeren #If grupları olduğu gibi bırakılır.");
+            sb.AppendLine($"Koşullu derleme sabitleri: yok (.vbp'de CondComp bulunamadı). {undefinedRule}");
             return;
         }
-        sb.AppendLine($"Koşullu derleme sabitleri: {Constants.Count}");
+        sb.AppendLine($"Koşullu derleme sabitleri: {Constants.Count}. {undefinedRule}");
         foreach (var (name, value, source) in Constants.All)
             sb.AppendLine($"  {name} = {(value is { } v ? v.ToString() : "bilinmiyor")}  ({source})");
     }

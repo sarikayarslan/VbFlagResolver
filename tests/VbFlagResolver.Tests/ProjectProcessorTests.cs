@@ -230,6 +230,44 @@ public class ProjectProcessorTests
     }
 
     [Fact]
+    public void Process_only_cleans_selected_files_and_keeps_the_rest()
+    {
+        var outDir = TestPaths.NewTempDir();
+        var o = Options(outDir);
+        var report = ProjectProcessor.Run(new ProcessOptions
+        {
+            FlagsPath = o.FlagsPath, SourceDir = o.SourceDir, OutputDir = outDir, ProcessOnly = ["frmMain.frm"],
+        });
+        Assert.True(report.Files.Single(f => f.RelativePath == "frmMain.frm").Changed);
+        foreach (var f in report.Files.Where(f => f.RelativePath != "frmMain.frm"))
+        {
+            Assert.True(f.KeptAsIs, f.RelativePath);
+            Assert.Equal(File.ReadAllBytes(Path.Combine(TestPaths.SamplesDir, f.RelativePath)), File.ReadAllBytes(Path.Combine(outDir, f.RelativePath)));
+        }
+
+        // boş liste: hiçbir dosya temizlenmez
+        var none = ProjectProcessor.Run(new ProcessOptions { FlagsPath = o.FlagsPath, SourceDir = o.SourceDir, DryRun = true, ProcessOnly = [] });
+        Assert.All(none.Files, f => Assert.True(f.KeptAsIs));
+    }
+
+    [Theory]
+    [InlineData(true, "Sub A()\r\n    a = 2\r\nEnd Sub\r\n")]   // VB: tanımsız ARSLAN = 0 → #Else
+    [InlineData(false, "Sub A()\r\n#If ARSLAN = 1 Then\r\n    a = 1\r\n#Else\r\n    a = 2\r\n#End If\r\nEnd Sub\r\n")]
+    public void Undefined_directive_constant_is_zero_by_default(bool zero, string expected)
+    {
+        var src = TestPaths.NewTempDir();
+        File.WriteAllText(Path.Combine(src, "mFlags.bas"), "Attribute VB_Name = \"mFlags\"\r\nPublic Const T1 = True\r\n");
+        File.WriteAllText(Path.Combine(src, "modA.bas"), "Sub A()\r\n#If ARSLAN = 1 Then\r\n    a = 1\r\n#Else\r\n    a = 2\r\n#End If\r\nEnd Sub\r\n");
+        var outDir = TestPaths.NewTempDir();
+        var report = ProjectProcessor.Run(new ProcessOptions
+        {
+            FlagsPath = Path.Combine(src, "mFlags.bas"), SourceDir = src, OutputDir = outDir, UndefinedConstantsAreZero = zero,
+        });
+        Assert.Equal(expected, File.ReadAllText(Path.Combine(outDir, "modA.bas")));
+        if (zero) Assert.Contains("tanımsız sabit 0 sayıldı: ARSLAN", report.ToText());
+    }
+
+    [Fact]
     public void Output_inside_source_is_refused()
         => Assert.Throws<ArgumentException>(() => ProjectProcessor.Run(Options(Path.Combine(TestPaths.SamplesDir, "out"))));
 

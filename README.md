@@ -42,7 +42,8 @@ değişikliği ve olası riski (silinen koddaki fonksiyon çağrıları, etiketl
 
 1. `publish/` klasöründeki `VbFlagResolver.Gui.exe` dosyasını indirin (kurulum gerekmez, aşağıya bakın).
 2. Bayrak modülünüzü (`.bas`) ve proje klasörünüzü seçip **Önizle**'ye basın.
-3. **Bayraklar** sekmesinde değerlerin doğru okunduğunu, **Dosyalar ve önizleme** sekmesinde değişiklikleri kontrol edin.
+3. **Bayraklar** sekmesinde değerlerin doğru okunduğunu, **Dosyalar ve önizleme** sekmesinde değişiklikleri kontrol edin
+   ve temizlenecek dosyaları işaretleyin.
 4. **Dönüştür ve çıktıya yaz** ile temizlenmiş projeyi ayrı bir klasöre üretin, VB'de açıp derleyin.
 
 Denemek için depodaki `samples/` klasörü hazır bir örnek proje içerir.
@@ -166,14 +167,17 @@ Tek dosyalık exe ilk açılışta kendini birkaç saniye içinde hazırlar; son
    Okuma seçenekleri değiştirilince liste yeniden okunur.
 2. **Önizle (F5)** dosya yazmadan çalışır. Sonuçlar üç sekmede görünür:
    - **Dosyalar ve önizleme:** dosya başına silinen/açılan/sadeleşen blok sayıları; seçilen dosyanın renkli farkı
-     (orijinal ↔ yeni satır numaralarıyla) ve satır satır değişiklik/uyarı listesi. Bir dosyanın başındaki kutuyu
-     işaretlerseniz o dosya **dönüştürülmeden olduğu gibi aktarılır** (önizleme kendiliğinden yenilenir). İşaretler
-     kaynak klasör başına saklanır. İşaretli dosyalardaki bayrak atamaları yine taranır (bayrağı Bilinmiyor yapabilir).
+     (orijinal ↔ yeni satır numaralarıyla) ve satır satır değişiklik/uyarı listesi. Listeden bir değişiklik veya uyarı
+     satırına tıklayınca önizleme o satıra gider.
+     Önizleme tüm dosyalarda neyin değişeceğini gösterir; **yalnızca kutusu işaretli dosyalar temizlenir**, diğerleri
+     olduğu gibi aktarılır. **Değişenlerin hepsini seç** / **Seçimi kaldır** düğmeleri toplu seçim yapar; seçim kaynak
+     klasör başına saklanır. Seçilmeyen dosyalardaki bayrak atamaları da taranır (bayrağı Bilinmiyor yapabilir).
    - **Bayraklar:** önizlemeden sonra kullanıldıkları dosya sayısı ve formlardaki atamalar nedeniyle Bilinmiyor
      olanlar da eklenir; arama ve değere göre filtre (True/False/Bilinmiyor/kullanılmayan); bayrak dosyasında
      tanınmayan satırlar.
    - **Rapor:** komut satırının ürettiği raporun aynısı; **Raporu kaydet** ile dosyaya yazılır.
-3. Önizleme uygunsa **Dönüştür ve çıktıya yaz**. Çıktı klasörü boş değilse onay istenir; kaynak klasöre asla yazılmaz.
+3. Temizlenecek dosyaları işaretleyip **Dönüştür ve çıktıya yaz**. Hiç dosya seçilmediyse veya çıktı klasörü boş
+   değilse onay istenir; kaynak klasöre asla yazılmaz.
 
 **Temizle** tüm alanları, seçenekleri ve sonuçları başlangıç durumuna döndürür; diskteki hiçbir dosyaya dokunmaz.
 
@@ -190,6 +194,7 @@ Tek dosyalık exe ilk açılışta kendini birkaç saniye içinde hazırlar; son
 | **Kod sayfası** (`--codepage`) | Dosyaların karakter kodlaması. 1254 = Windows Türkçe (ğ, ş, ı, İ…). Dosyalar bu kodlamayla okunur ve yazılır; değişmeyen satırlar her durumda bayt bayt korunur. | Yalnızca kaynaklar başka kodlamayla kaydedilmişse (ör. 1252 Batı Avrupa). Yanlış değer Türkçe karakterlerin önizlemede bozuk görünmesine yol açar. |
 | **#If bloklarını çöz** (`--no-directives` kapatır) | **İşaretli (varsayılan):** `#If`/`#ElseIf`/`#Else`/`#End If` grupları derleme sabitlerine göre çözülür; VB'nin derleyeceği dal kalır, diğer dallar ve `#If` satırları silinir (bkz. "Koşullu derleme"). **Boş:** `#If`'lere dokunulmaz; bayrak dosyasında `#If` içindeki tanım/atamalar Bilinmiyor sayılır. | `#If`'lerin çıktıda olduğu gibi kalması isteniyorsa kapatılır (ör. farklı derleme yapılandırmaları korunacaksa). |
 | **Derleme sabitleri** (`--define`) | `#If` koşullarındaki sabitlerin değerleri, ör. `DEBUG_MODE=0, YENI_EKRAN=1`. **Boş:** kaynak klasördeki `.vbp` dosyasının `CondComp` satırı kullanılır (VB'de Proje Özellikleri → Make → Conditional Compilation Arguments). Verilen değerler `.vbp`'yi ezer. | Hangi derleme için temizlik yapılacaksa o değerler yazılır; ör. `.vbp`'de geliştirme ayarı (`DEBUG_MODE = 1`) kayıtlıysa ve sürüm (`0`) için temizlenecekse. Kullanılan değerler "Yordamlar ve notlar" bölümünde ve raporda görünür. |
+| **Tanımsız sabit = 0** (`--undefined-unknown` kapatır) | **İşaretli (varsayılan):** `.vbp`'de, Derleme sabitleri alanında veya `#Const` ile hiç tanımlanmamış sabit VB'deki gibi 0 (False) sayılır; ör. `#If ARSLAN = 1` dalı silinir. **Boş:** böyle `#If` grupları olduğu gibi bırakılır ve uyarı verilir. | Kullandığınız sabit listesinin eksik olabileceğinden şüpheleniyorsanız (ör. sabit yalnızca derleme makinesinde tanımlıysa) kaldırın. |
 | **Hiç değer atanmamış Boolean değişken** (iki seçenekli; `--unassigned-unknown` = Bilinmiyor) | Yalnızca bayrak modülünde tanımlanıp hiçbir yordamda değer verilmeyen `gbX As Boolean` değişkenleri için; sabitleri ve değer atanmış değişkenleri etkilemez. **False say (varsayılan):** VB'de Boolean değişken False ile başlar; `If gbX Then` blokları silinir, `Else` kısmı kalır. **Bilinmiyor say:** bu bayraklara bağlı bloklar olduğu gibi kalır. | Değerin aracın göremediği bir yoldan verildiğinden şüpheleniliyorsa (ör. `ByRef` parametreyle başka yordamda değiştiriliyorsa). Diğer dosyalardaki doğrudan `gbX = ...` atamaları zaten yakalanır ve bayrağı her durumda Bilinmiyor yapar. |
 | **Diğer dosyaları (.frx, .vbp...) kopyala** (`--no-copy` kapatır) | Önizlemeye etkisi yoktur; yalnızca **Dönüştür ve çıktıya yaz** sırasında. **İşaretli (varsayılan):** işlenmeyen dosyalar da (`.frx` form resimleri, `.vbp` proje, `.res`, resimler ve **bayrak dosyasının kendisi**) çıktıya aynen kopyalanır; çıktı klasörü VB5'te doğrudan açılabilen eksiksiz bir proje olur. **Boş:** yalnızca işlenen kaynak dosyalar yazılır; `.frx` ve bayrak dosyası olmadan proje açılmaz, dosyaları elle bir proje kopyasının üzerine koymak gerekir. | Neredeyse her zaman işaretli bırakılır. Yalnızca değişen kaynak dosyalarını ayrıca görmek isteniyorsa kapatılır. |
 
@@ -225,10 +230,12 @@ klasörün içinde veya bayrak dosyasının kendisi olamaz. Yollar junction/syml
 | `--unassigned-unknown` | Hiç atanmamış Boolean değişkeni False yerine Bilinmiyor say. |
 | `--ext .frm,.bas` | İşlenecek uzantılar. |
 | `--keep frmEski.frm,Moduller\*.bas` | Bu dosyaları dönüştürmeden olduğu gibi aktar. Göreli yol veya yalnızca dosya adı; `*` ve `?` kullanılabilir; tekrar verilebilir. Bayrak atamaları yine taranır. |
+| `--only frmMain.frm,frmStok.frm` | Yalnızca bu dosyaları temizle, diğerlerini olduğu gibi aktar (`--keep` ile aynı desenler). |
 | `--no-copy` | Kaynak olmayan dosyaları kopyalama. |
 | `--codepage 1254` | Kaynak kod sayfası. |
 | `--define A=0,B=1` | `#If` için derleme sabitleri; `.vbp` CondComp değerlerini ezer. |
 | `--no-directives` | `#If` gruplarını çözme. |
+| `--undefined-unknown` | Tanımsız `#If` sabitini 0 sayma; o grubu olduğu gibi bırak (varsayılan: VB gibi 0). |
 
 ## Değişken bayraklar nasıl okunur?
 
@@ -270,9 +277,11 @@ Sonuçlar:
 - `#If`/`#Else` içinde iki farklı If başlığı olup gövde ve `End If` ortaksa, önce `#If` çözüldüğü için geriye tek başlık
   kalır ve If normal işlenir.
 - Bayrak dosyasında `#If` içindeki tanım ve atamalar da derlenecek dala göre okunur.
-- Değeri bilinmeyen (tanımsız) sabit içeren grup **olduğu gibi** bırakılır, uyarı verilir; içindeki bayrak If'leri
-  yine işlenir. Bayrak dosyasında böyle bir grubun içindeki tanım/atama Bilinmiyor sayılır.
-  (VB tanımsız sabiti 0 kabul eder; araç bunu varsaymaz. Gerekirse değeri "Derleme sabitleri"ne yazın.)
+- Hiçbir yerde tanımlanmamış sabit, VB'deki gibi **0 (False)** sayılır: `#If ARSLAN = 1` dalı silinir, `#Else` kalır;
+  raporda "tanımsız sabit 0 sayıldı: ARSLAN" yazar. Arayüzde **Tanımsız sabit = 0** kutusu kaldırılırsa (komut
+  satırında `--undefined-unknown`) böyle gruplar **olduğu gibi** bırakılır ve uyarı verilir; içindeki bayrak If'leri
+  yine işlenir, bayrak dosyasında böyle bir grubun içindeki tanım/atama Bilinmiyor sayılır.
+- Tanımlı ama değeri bilinmeyen sabit (ör. iki `.vbp` farklı değer veriyorsa) içeren grup her durumda olduğu gibi kalır.
 - Silinecek bir If dalı çözülemeyen bir `#If`/`#End If` ile kesişiyorsa (biri silinip diğeri kalacaksa) o If bloğu
   değiştirilmez ve uyarı verilir; derlenmeyen kod üretilmez.
 - Hangi dalın kaldığı raporda (`#If DEBUG_MODE → #Else dalı kaldı`) ve arayüzde dosya listesinin `#If` sütununda görünür.
@@ -301,6 +310,9 @@ Sonuçlar:
   korunur; silinen dalın başlık yorumu o dalla birlikte silinir.
 - Girinti, gövdenin başlıktan derin ilk kod satırına göre bir seviye azaltılır; bundan daha az girintili (hatalı
   girintili) satırlara dokunulmaz. Sekme 4 sütun sayılır.
+- Temizlikten sonra içi tamamen boşalan yordama (Sub/Function/Property) bir yorum satırı eklenir ve uyarı verilir:
+  VB IDE içi boş yordamı kaydederken siler, bu da çağrıldığı yerlerde derleme hatasına yol açar. Yordam gerekmiyorsa
+  çağrılarıyla birlikte elle silinebilir.
 - Tek satırlık If'ten kalan kısım anlamı değişmesin diye düzeltilir: `If FT Then 100` → `GoTo 100`,
   `If FT Then Init: x = 1` → `Call Init: x = 1` (yoksa `Init` etikete dönüşürdü).
 - `&H`/`&O` sabitleri VB gibi işaretli yorumlanır (`&HFFFF` = -1, `&HFFFF&` = 65535).

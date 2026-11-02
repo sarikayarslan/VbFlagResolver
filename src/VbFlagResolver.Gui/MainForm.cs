@@ -25,6 +25,7 @@ internal sealed class MainForm : Form
     private readonly RadioButton _rbUnassignedUnknown = new() { Text = "Bilinmiyor say — bağlı bloklara dokunulmaz", AutoSize = true };
     private readonly CheckBox _chkCopy = new() { Text = "Diğer dosyaları (.frx, .vbp...) kopyala", AutoSize = true };
     private readonly CheckBox _chkDirectives = new() { Text = "#If bloklarını çöz", AutoSize = true, Checked = true };
+    private readonly CheckBox _chkUndefinedZero = new() { Text = "Tanımsız sabit = 0", AutoSize = true, Checked = true };
     private readonly TextBox _txtDefines = new() { Width = 300, PlaceholderText = ".vbp'deki CondComp kullanılır; değiştirmek için ör. DEBUG_MODE=0" };
     /// <summary>Bayrak dosyası okunurken kullanılan derleme sabitleri (önizlemeden bağımsız görünüm için).</summary>
     private CondConstants? _flagConsts;
@@ -68,10 +69,13 @@ internal sealed class MainForm : Form
     /// <summary>Son önizleme/dönüştürme raporu güncel girdilerle mi üretildi?</summary>
     private bool _reportIsCurrent;
     private readonly System.Windows.Forms.Timer _flagReadTimer = new() { Interval = 400 };
-    /// <summary>"Olduğu gibi aktar" işaretleri değişince önizlemeyi kısa gecikmeyle yeniler.</summary>
-    private readonly System.Windows.Forms.Timer _keepTimer = new() { Interval = 500 };
     private bool _fillingFiles;
-    private string? _reselectFile;
+    private readonly Button _btnSelectChanged = new() { Text = "Değişenlerin hepsini seç", AutoSize = true };
+    private readonly Button _btnSelectNone = new() { Text = "Seçimi kaldır", AutoSize = true };
+    private readonly Label _lblSelection = new() { AutoSize = true, Padding = new Padding(8, 6, 0, 0), ForeColor = Color.DimGray };
+    /// <summary>Önizleme satırına git: ayrıntı satırının hedeflediği orijinal satır (tüm satırlar açılınca kaydırılır).</summary>
+    private int? _pendingDiffLine;
+    private List<int> _diffLineMap = [];
     /// <summary>
     /// Dosya listesinde son fare tıklaması/boşluk tuşu zamanı. ListView, öğeler eklenirken veya tutamaç yeniden
     /// oluşturulurken de ItemChecked gönderir; yalnızca kullanıcı girdisinin hemen ardından gelen işaret değişikliği sayılır.
@@ -113,6 +117,10 @@ internal sealed class MainForm : Form
             "İşaretli: #If / #ElseIf / #Else / #End If grupları derleme sabitlerine göre çözülür; VB'nin derleyeceği dal kalır,\n" +
             "diğer dallar ve #If satırları silinir. Değeri bilinmeyen sabit içeren grup olduğu gibi bırakılır ve raporlanır.\n" +
             "Boş: #If'lere dokunulmaz; bayrak dosyasında #If içindeki tanım/atamalar Bilinmiyor sayılır.");
+        _toolTip.SetToolTip(_chkUndefinedZero,
+            "İşaretli (varsayılan): .vbp'de, Derleme sabitleri alanında veya #Const ile hiç tanımlanmamış bir sabit VB'deki gibi 0 (False)\n" +
+            "sayılır; ör. #If ARSLAN = 1 dalı silinir, #Else kalır. Raporda 'tanımsız sabit 0 sayıldı' olarak görünür.\n" +
+            "Boş: tanımsız sabit içeren #If grubu olduğu gibi bırakılır (sabit listesinin eksik olabileceği durumlar için).");
         _toolTip.SetToolTip(_txtDefines,
             "Boş bırakılırsa kaynak klasördeki .vbp dosyasının CondComp satırı kullanılır (VB'deki Proje Özellikleri > Make > Conditional Compilation).\n" +
             "Farklı bir derleme için değer verin, ör. DEBUG_MODE=0, YENI_EKRAN=1 — .vbp değerlerini ezer.\n" +
@@ -170,7 +178,7 @@ internal sealed class MainForm : Form
         var line2 = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
         line2.Controls.AddRange([Lbl("Hiç değer atanmamış Boolean değişken:"), _rbUnassignedFalse, _rbUnassignedUnknown]);
         var line3 = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(8, 0, 0, 0) };
-        line3.Controls.AddRange([_chkDirectives, Lbl("Derleme sabitleri:"), _txtDefines, Spacer(16), _chkCopy]);
+        line3.Controls.AddRange([_chkDirectives, Lbl("Derleme sabitleri:"), _txtDefines, _chkUndefinedZero, Spacer(16), _chkCopy]);
         var opts = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1 };
         opts.Controls.Add(line1, 0, 0);
         opts.Controls.Add(line2, 0, 1);
@@ -221,8 +229,8 @@ internal sealed class MainForm : Form
 
     private TabPage BuildFilesTab()
     {
-        _lvFiles.CheckBoxes = true; // işaretli dosya dönüştürülmeden olduğu gibi aktarılır
-        AddColumn(_lvFiles, "☑ = olduğu gibi aktar", 185);
+        _lvFiles.CheckBoxes = true; // yalnızca işaretli dosyalar temizlenir; diğerleri olduğu gibi aktarılır
+        AddColumn(_lvFiles, "☑ = temizle", 185);
         AddColumn(_lvFiles, "Durum", 75);
         AddColumn(_lvFiles, "Silinen", 52, HorizontalAlignment.Right);
         AddColumn(_lvFiles, "Açılan", 50, HorizontalAlignment.Right);
@@ -253,9 +261,13 @@ internal sealed class MainForm : Form
         right.Panel1.Controls.Add(diffPanel);
         right.Panel2.Controls.Add(_lvDetails);
 
+        var selectBar = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(2) };
+        selectBar.Controls.AddRange([_btnSelectChanged, _btnSelectNone, _lblSelection]);
         var split = new SplitContainer { Dock = DockStyle.Fill };
         split.Panel1.Controls.Add(_lvFiles);
+        split.Panel1.Controls.Add(selectBar);
         split.Panel2.Controls.Add(right);
+        _rtbDiff.HideSelection = false; // ayrıntıdan gidilen satır, odak listedeyken de vurgulu kalsın
 
         var page = new TabPage("Dosyalar ve önizleme");
         page.Controls.Add(split);
@@ -339,13 +351,10 @@ internal sealed class MainForm : Form
         // ListView çift tıklamada işareti değiştirir; dosyaya bakmak için çift tıklayan kullanıcı yanlışlıkla işaretlemesin
         _lvFiles.ItemCheck += (_, e) => { if (doubleClick) e.NewValue = e.CurrentValue; };
         _lvFiles.KeyDown += (_, e) => { if (e.KeyCode == Keys.Space) _lastFileListInput = DateTime.UtcNow; };
-        _lvFiles.ItemChecked += (_, e) => ToggleKeep(e.Item);
-        _keepTimer.Tick += async (_, _) =>
-        {
-            _keepTimer.Stop();
-            if (_btnPreview.Enabled) await RunAsync(dryRun: true);
-            else _keepTimer.Start(); // bir işlem sürüyor: bitince tekrar dene
-        };
+        _lvFiles.ItemChecked += (_, e) => ToggleClean(e.Item);
+        _btnSelectChanged.Click += (_, _) => SetSelection(f => f.Changed);
+        _btnSelectNone.Click += (_, _) => SetSelection(_ => false);
+        _lvDetails.SelectedIndexChanged += (_, _) => JumpToDetail();
         _chkAllLines.CheckedChanged += (_, _) => ShowSelectedFile();
         _txtFlagFilter.TextChanged += (_, _) => FillFlags();
         _cmbFlagValue.SelectedIndexChanged += (_, _) => FillFlags();
@@ -369,7 +378,12 @@ internal sealed class MainForm : Form
         _rbUnassignedUnknown.CheckedChanged += (_, _) => ScheduleFlagRead(); // iki yönde de tetiklenir
         _numCodePage.ValueChanged += (_, _) => ScheduleFlagRead();
         _txtDefines.TextChanged += (_, _) => ScheduleFlagRead();
-        _chkDirectives.CheckedChanged += (_, _) => { _txtDefines.Enabled = _chkDirectives.Checked; ScheduleFlagRead(); };
+        _chkDirectives.CheckedChanged += (_, _) =>
+        {
+            _txtDefines.Enabled = _chkUndefinedZero.Enabled = _chkDirectives.Checked;
+            ScheduleFlagRead();
+        };
+        _chkUndefinedZero.CheckedChanged += (_, _) => ScheduleFlagRead();
         _txtSrc.TextChanged += (_, _) => { if (File.Exists(_txtFlags.Text.Trim())) ScheduleFlagRead(); }; // .vbp sabitleri kaynaktan gelir
         _flagReadTimer.Tick += (_, _) =>
         {
@@ -457,9 +471,11 @@ internal sealed class MainForm : Form
             CopyOtherFiles = _chkCopy.Checked,
             Defines = _txtDefines.Text.Trim().Length > 0 ? _txtDefines.Text.Trim() : null,
             ResolveDirectives = _chkDirectives.Checked,
+            UndefinedConstantsAreZero = _chkUndefinedZero.Checked,
             CodePage = (int)_numCodePage.Value,
             Extensions = exts.Length > 0 ? exts : new ProcessOptions { FlagsPath = "", SourceDir = "" }.Extensions,
-            KeepAsIs = Directory.Exists(_txtSrc.Text.Trim()) ? _settings.KeepFor(_txtSrc.Text.Trim()).ToList() : [],
+            // önizleme tüm dosyaları gösterir (neyin değişeceğine bakıp seçmek için); yazarken yalnızca seçililer temizlenir
+            ProcessOnly = dryRun ? null : SelectedFiles(),
             FlagOptions = new FlagReaderOptions
             {
                 Mode = (FlagReadMode)Math.Max(0, _cmbMode.SelectedIndex),
@@ -475,6 +491,11 @@ internal sealed class MainForm : Form
         if (!Directory.Exists(_txtSrc.Text.Trim())) { Warn("Kaynak klasör bulunamadı."); return; }
         if (!dryRun)
         {
+            if (SelectedFiles().Count == 0
+                && MessageBox.Show(this, "Temizlenecek dosya seçilmedi; tüm dosyalar olduğu gibi kopyalanacak.\n\n" +
+                                         "Önizlemeden sonra temizlenecek dosyaların kutusunu işaretleyin (veya \"Değişenlerin hepsini seç\"). Yine de devam edilsin mi?",
+                    "Onay", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
+                return;
             var outDir = _txtOut.Text.Trim();
             if (Directory.Exists(outDir) && Directory.EnumerateFileSystemEntries(outDir).Any()
                 && MessageBox.Show(this, $"Çıktı klasörü boş değil:\n{outDir}\n\nAynı adlı dosyaların üzerine yazılacak. Devam edilsin mi?",
@@ -495,7 +516,8 @@ internal sealed class MainForm : Form
             Populate(report);
             int changed = report.Files.Count(f => f.Changed);
             _lblStatus.Text = (dryRun ? "Önizleme tamam (dosya yazılmadı): " : $"Yazıldı → {report.OutputDir}: ")
-                              + $"{report.Flags.Count} bayrak, {report.Files.Count} kaynak dosya, {changed} dosya değiş{(dryRun ? "ecek" : "ti")}, "
+                              + $"{report.Flags.Count} bayrak, {report.Files.Count} kaynak dosya, {changed} dosya "
+                              + (dryRun ? "değişebilir — temizlenecekleri işaretleyin, " : "temizlendi, ")
                               + $"{report.WarningCount} uyarı.";
         }
         catch (Exception ex)
@@ -521,6 +543,7 @@ internal sealed class MainForm : Form
         _chkCopy.Checked = defaults.CopyOtherFiles;
         _txtDefines.Text = defaults.Defines;
         _chkDirectives.Checked = defaults.ResolveDirectives;
+        _chkUndefinedZero.Checked = defaults.UndefinedConstantsAreZero;
         _flagConsts = null;
         _cmbFlagValue.SelectedIndex = 0;
         _chkAllLines.Checked = false;
@@ -560,27 +583,24 @@ internal sealed class MainForm : Form
 
     private void Populate(Report report)
     {
+        string? previous = _lvFiles.SelectedItems.Count > 0 ? ((FileReport)_lvFiles.SelectedItems[0].Tag!).RelativePath : null;
         _fillingFiles = true;
         _lvFiles.BeginUpdate();
         _lvFiles.Items.Clear();
         var ordered = report.Files
             .OrderByDescending(f => f.Failed).ThenByDescending(f => f.Changed || f.Warnings.Count > 0)
-            .ThenBy(f => f.KeptAsIs).ThenBy(f => f.RelativePath, StringComparer.OrdinalIgnoreCase);
+            .ThenBy(f => f.RelativePath, StringComparer.OrdinalIgnoreCase);
         foreach (var f in ordered)
         {
-            string state = f.Failed ? "HATA" : f.KeptAsIs ? "Olduğu gibi" : f.Changed ? "Değişiyor" : f.Warnings.Count > 0 ? "Uyarı" : "Aynı";
             var item = new ListViewItem([
-                f.RelativePath, state,
+                f.RelativePath, "",
                 f.Count(ChangeKind.BlockRemoved).ToString(), f.Count(ChangeKind.BlockLifted).ToString(),
                 f.Count(ChangeKind.BlockSimplified).ToString(), f.Count(ChangeKind.SingleLineIf).ToString(),
                 f.RemovedLines.ToString(), f.Warnings.Count.ToString(), f.Count(ChangeKind.DirectiveResolved).ToString(),
-            ]) { Tag = f, Checked = f.KeptAsIs };
-            if (f.Failed) item.ForeColor = Color.Firebrick;
-            else if (f.KeptAsIs) item.ForeColor = Color.SteelBlue;
-            else if (f.Changed) item.Font = new Font(_lvFiles.Font, FontStyle.Bold);
-            else if (f.Warnings.Count == 0) item.ForeColor = Color.Gray;
+            ]) { Tag = f, Checked = IsSelected(f.RelativePath) };
             if (f.Warnings.Count > 0) item.SubItems[7].ForeColor = Color.DarkOrange;
             item.UseItemStyleForSubItems = f.Warnings.Count == 0;
+            StyleFileItem(item);
             _lvFiles.Items.Add(item);
         }
         _lvFiles.EndUpdate();
@@ -588,36 +608,90 @@ internal sealed class MainForm : Form
 
         FillFlags();
         _txtReport.Text = report.ToText().Replace("\r\n", "\n").Replace("\n", "\r\n");
-        _tabs.TabPages[0].Text = $"Dosyalar ve önizleme ({report.Files.Count(f => f.Changed)} değişiyor)";
+        UpdateSelectionInfo();
 
-        // işaret değiştirildikten sonraki yenilemede aynı dosya seçili kalsın
-        var reselect = _reselectFile == null ? null
-            : _lvFiles.Items.Cast<ListViewItem>().FirstOrDefault(i => ((FileReport)i.Tag!).RelativePath == _reselectFile);
-        _reselectFile = null;
+        // yeniden önizlemede aynı dosya seçili kalsın
+        var reselect = _lvFiles.Items.Cast<ListViewItem>().FirstOrDefault(i => ((FileReport)i.Tag!).RelativePath == previous);
         if (reselect != null) { reselect.Selected = true; reselect.EnsureVisible(); }
         else if (_lvFiles.Items.Count > 0) _lvFiles.Items[0].Selected = true;
         else ShowSelectedFile();
     }
 
-    /// <summary>Dosyanın "olduğu gibi aktar" işaretini bu kaynak klasör için kaydeder ve önizlemeyi yeniler.</summary>
-    private void ToggleKeep(ListViewItem item)
+    /// <summary>Durum metni ve renk: önizlemede değişebilen dosya seçiliyse temizlenir, değilse olduğu gibi aktarılır.</summary>
+    private void StyleFileItem(ListViewItem item)
+    {
+        var f = (FileReport)item.Tag!;
+        bool sel = item.Checked;
+        item.SubItems[1].Text =
+            f.Failed ? "HATA"
+            : f.KeptAsIs ? "Olduğu gibi"
+            : f.Changed ? (_lastWasDryRun ? (sel ? "Temizlenecek" : "Seçilmedi") : "Temizlendi")
+            : f.Warnings.Count > 0 ? "Uyarı" : "Aynı";
+        item.Font = f.Changed && sel ? new Font(_lvFiles.Font, FontStyle.Bold) : _lvFiles.Font;
+        item.ForeColor = f.Failed ? Color.Firebrick
+            : f.KeptAsIs ? Color.SteelBlue
+            : f.Changed ? (sel ? SystemColors.WindowText : Color.DimGray)
+            : f.Warnings.Count == 0 ? Color.Gray : SystemColors.WindowText;
+    }
+
+    private bool IsSelected(string rel)
+        => Directory.Exists(_txtSrc.Text.Trim())
+           && _settings.CleanFor(_txtSrc.Text.Trim()).Any(k => k.Equals(rel, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>Temizlenecek dosyalar (bu kaynak klasör için kayıtlı seçim).</summary>
+    private List<string> SelectedFiles()
+        => Directory.Exists(_txtSrc.Text.Trim()) ? _settings.CleanFor(_txtSrc.Text.Trim()).ToList() : [];
+
+    private void UpdateSelectionInfo()
+    {
+        if (_report == null) { _lblSelection.Text = ""; return; }
+        int changed = _report.Files.Count(f => f.Changed);
+        int selected = _lvFiles.Items.Cast<ListViewItem>().Count(i => i.Checked);
+        _lblSelection.Text = $"{selected} dosya temizlenecek; işaretsizler olduğu gibi aktarılır.";
+        _tabs.TabPages[0].Text = $"Dosyalar ve önizleme ({changed} değişebilir, {selected} seçili)";
+    }
+
+    /// <summary>Kullanıcının işaret değişikliğini bu kaynak klasör için kaydeder (önizlemeyi yeniden çalıştırmaz).</summary>
+    private void ToggleClean(ListViewItem item)
     {
         if (_fillingFiles || item.Tag is not FileReport f || !Directory.Exists(_txtSrc.Text.Trim())) return;
         if ((DateTime.UtcNow - _lastFileListInput).TotalMilliseconds > 500)
         {
-            // kullanıcı girdisi olmadan gelen olay: listedeki görünümü rapordaki duruma geri çek
-            if (item.Checked != f.KeptAsIs) BeginInvoke(() => { _fillingFiles = true; item.Checked = f.KeptAsIs; _fillingFiles = false; });
+            // kullanıcı girdisi olmadan gelen olay: görünümü kayıtlı seçime geri çek
+            bool saved = IsSelected(f.RelativePath);
+            if (item.Checked != saved) BeginInvoke(() => { _fillingFiles = true; item.Checked = saved; _fillingFiles = false; });
             return;
         }
-        var keep = _settings.KeepFor(_txtSrc.Text.Trim());
-        keep.RemoveAll(k => k.Equals(f.RelativePath, StringComparison.OrdinalIgnoreCase));
-        if (item.Checked) keep.Add(f.RelativePath);
+        SaveSelection(f.RelativePath, item.Checked);
         _settings.Save();
-        _reselectFile = f.RelativePath;
-        item.SubItems[1].Text = item.Checked ? "Olduğu gibi" : "yenileniyor...";
-        _reportIsCurrent = false;
-        _keepTimer.Stop();
-        _keepTimer.Start();
+        StyleFileItem(item);
+        UpdateSelectionInfo();
+        if (item.Selected) ShowSelectedFile();
+    }
+
+    private void SaveSelection(string rel, bool selected)
+    {
+        var list = _settings.CleanFor(_txtSrc.Text.Trim());
+        list.RemoveAll(k => k.Equals(rel, StringComparison.OrdinalIgnoreCase));
+        if (selected) list.Add(rel);
+    }
+
+    /// <summary>Düğmelerle toplu seçim.</summary>
+    private void SetSelection(Func<FileReport, bool> select)
+    {
+        if (!Directory.Exists(_txtSrc.Text.Trim())) return;
+        _fillingFiles = true;
+        foreach (ListViewItem item in _lvFiles.Items)
+        {
+            var f = (FileReport)item.Tag!;
+            item.Checked = select(f);
+            SaveSelection(f.RelativePath, item.Checked);
+            StyleFileItem(item);
+        }
+        _fillingFiles = false;
+        _settings.Save();
+        UpdateSelectionInfo();
+        ShowSelectedFile();
     }
 
     // ------------------------------------------------------------------ bayraklar
@@ -649,6 +723,7 @@ internal sealed class MainForm : Form
             var src = _txtSrc.Text.Trim();
             var constNotes = new List<SourceNote>();
             _flagConsts = CondConstants.FromProject(Directory.Exists(src) ? src : null, po.Defines, constNotes, po.CodePage);
+            _flagConsts.UndefinedIsZero = po.UndefinedConstantsAreZero;
             _flagRead = FlagReader.Read(path, new FlagReaderOptions
             {
                 Mode = fo.Mode, InitProcedures = fo.InitProcedures,
@@ -834,11 +909,12 @@ internal sealed class MainForm : Form
         if (f.OriginalBytes != null && f.OutputBytes != null)
         {
             var enc = VbSourceFile.GetEncoding((int)_numCodePage.Value);
-            _rtbDiff.Rtf = DiffRtf.Build(enc.GetString(f.OriginalBytes), enc.GetString(f.OutputBytes), _chkAllLines.Checked);
+            _rtbDiff.Rtf = DiffRtf.Build(enc.GetString(f.OriginalBytes), enc.GetString(f.OutputBytes), _chkAllLines.Checked, out _diffLineMap);
         }
         else
         {
             _rtbDiff.Clear();
+            _diffLineMap = [];
         }
 
         foreach (var c in f.Changes)
@@ -848,11 +924,60 @@ internal sealed class MainForm : Form
             var item = new ListViewItem([w.Line.ToString(), "UYARI", w.Message + (w.Text != null ? "   | " + w.Text : "")]) { ForeColor = Color.DarkOrange };
             _lvDetails.Items.Add(item);
         }
+        var fileItem = _lvFiles.SelectedItems[0];
         if (f.KeptAsIs)
-            _lvDetails.Items.Add(new ListViewItem(["", "", "İşaretli: dönüştürülmeden olduğu gibi aktarılıyor. İşareti kaldırınca işlenir."]) { ForeColor = Color.SteelBlue });
+            _lvDetails.Items.Add(new ListViewItem(["", "", "Seçilmediği için temizlenmeden olduğu gibi aktarıldı."]) { ForeColor = Color.SteelBlue });
+        else if (f.Changed && _lastWasDryRun && !fileItem.Checked)
+            _lvDetails.Items.Insert(0, new ListViewItem(["", "", "Seçili değil: Dönüştür'de bu dosya temizlenmeden olduğu gibi aktarılır. Temizlemek için kutusunu işaretleyin."]) { ForeColor = Color.SteelBlue });
         else if (_lvDetails.Items.Count == 0)
             _lvDetails.Items.Add(new ListViewItem(["", "", "Bu dosyada değişiklik veya uyarı yok."]) { ForeColor = Color.Gray });
         _lvDetails.EndUpdate();
+
+        // "tüm satırlar" açılarak yeniden çizildiyse istenen satıra git ve ayrıntı satırını yeniden seç
+        if (_pendingDiffLine is int pending)
+        {
+            _pendingDiffLine = null;
+            ScrollDiffToLine(pending);
+            _jumping = true;
+            var again = _lvDetails.Items.Cast<ListViewItem>().FirstOrDefault(i => i.Text == pending.ToString());
+            if (again != null) again.Selected = true;
+            _jumping = false;
+        }
+    }
+
+    private bool _jumping;
+
+    /// <summary>Ayrıntı listesinde seçilen değişiklik/uyarı satırına önizlemede gider.</summary>
+    private void JumpToDetail()
+    {
+        if (_jumping || _lvDetails.SelectedItems.Count == 0 || !int.TryParse(_lvDetails.SelectedItems[0].Text, out int line)) return;
+        if (_diffLineMap.Contains(line))
+        {
+            ScrollDiffToLine(line);
+        }
+        else if (!_chkAllLines.Checked)
+        {
+            // satır özet görünümde yok (ör. değişmeyen satırdaki uyarı): tüm satırları açıp oraya git
+            _pendingDiffLine = line;
+            _chkAllLines.Checked = true;
+        }
+    }
+
+    private const int EM_GETFIRSTVISIBLELINE = 0xCE, EM_LINESCROLL = 0xB6;
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+    /// <summary>Orijinal satır numarasına karşılık gelen önizleme satırını seçer ve görünür alanın üstüne yakın kaydırır.</summary>
+    private void ScrollDiffToLine(int originalLine)
+    {
+        int idx = _diffLineMap.IndexOf(originalLine);
+        if (idx < 0 || idx >= _rtbDiff.Lines.Length) return;
+        int start = _rtbDiff.GetFirstCharIndexFromLine(idx);
+        int end = idx + 1 < _rtbDiff.Lines.Length ? _rtbDiff.GetFirstCharIndexFromLine(idx + 1) - 1 : _rtbDiff.TextLength;
+        _rtbDiff.Select(start, Math.Max(0, end - start));
+        int first = (int)SendMessage(_rtbDiff.Handle, EM_GETFIRSTVISIBLELINE, IntPtr.Zero, IntPtr.Zero);
+        SendMessage(_rtbDiff.Handle, EM_LINESCROLL, IntPtr.Zero, idx - first - 3);
     }
 
     private static string KindText(ChangeKind k) => k switch
@@ -904,7 +1029,8 @@ internal sealed class MainForm : Form
         _chkCopy.Checked = _settings.CopyOtherFiles;
         _txtDefines.Text = _settings.Defines;
         _chkDirectives.Checked = _settings.ResolveDirectives;
-        _txtDefines.Enabled = _chkDirectives.Checked;
+        _chkUndefinedZero.Checked = _settings.UndefinedConstantsAreZero;
+        _txtDefines.Enabled = _chkUndefinedZero.Enabled = _chkDirectives.Checked;
     }
 
     private void SetUnassignedUnknown(bool unknown)
@@ -926,6 +1052,7 @@ internal sealed class MainForm : Form
         _settings.CopyOtherFiles = _chkCopy.Checked;
         _settings.Defines = _txtDefines.Text.Trim();
         _settings.ResolveDirectives = _chkDirectives.Checked;
+        _settings.UndefinedConstantsAreZero = _chkUndefinedZero.Checked;
         _settings.Save();
     }
 

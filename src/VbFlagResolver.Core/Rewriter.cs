@@ -97,6 +97,7 @@ public sealed class Rewriter
             return new RewriteResult { Output = file.OriginalBytes, Changed = false, Report = _report, FlagReferences = refs };
 
         CheckRemovedDeclarations(output);
+        KeepEmptiedProcedures(logical, output);
         _report.Changed = true;
         _report.RemovedLines = _code.Count - output.Count;
 
@@ -539,6 +540,76 @@ public sealed class Rewriter
     }
 
     private static readonly string[] ProcScopes = ["Public", "Private", "Friend", "Static", "Global"];
+
+    /// <summary>Boşalan yordama eklenen satır: VB IDE içi boş yordamı kaydederken siler, yorum satırı olanı silmez.</summary>
+    public const string EmptiedProcedureComment = "' (VbFlagResolver: bayrağa bağlı kod kaldırıldı; VB boş yordamı silmesin diye bırakıldı)";
+
+    /// <summary>Satır bir yordam başlığıysa "Sub X" / "Property Get X" gibi anahtarı, değilse null.</summary>
+    private static string? ProcedureKey(List<Token> t)
+    {
+        int k = 0;
+        while (k < t.Count && ProcScopes.Any(t[k].Is)) k++;
+        if (k >= t.Count || !(t[k].Is("Sub") || t[k].Is("Function") || t[k].Is("Property"))) return null;
+        int name = t[k].Is("Property") ? k + 2 : k + 1;
+        if (name >= t.Count) return null;
+        // tek satırda biten yordam ("Sub X(): End Sub") ayrıca ele alınmaz
+        if (t.Any(x => x.Is("End")) && t.Count > name + 1) return null;
+        return string.Join(" ", t.Skip(k).Take(name - k + 1).Select(x => x.Text.ToLowerInvariant()));
+    }
+
+    private static bool IsProcedureEnd(List<Token> t)
+        => t.Count > 1 && t[0].Is("End") && (t[1].Is("Sub") || t[1].Is("Function") || t[1].Is("Property"));
+
+    /// <summary>
+    /// Orijinalde içi dolu olup temizlikten sonra hiç satırı kalmayan yordamlara yorum satırı ekler; yoksa VB IDE
+    /// yordamı siler ve çağrıldığı yerler derlenmez.
+    /// </summary>
+    private void KeepEmptiedProcedures(IReadOnlyList<LogicalLine> original, List<OutputLine> output)
+    {
+        // orijinalde içinde en az bir satır (kod veya yorum) olan yordamlar; aynı adlılar sırayla sayılır
+        var hadContent = new Dictionary<string, Queue<(bool Content, int Line)>>();
+        string? key = null;
+        bool content = false;
+        int headerLine = 0;
+        foreach (var l in original)
+        {
+            if (key == null)
+            {
+                if (ProcedureKey(l.Tokens) is { } k) { key = k; content = false; headerLine = l.LineNumber; }
+                continue;
+            }
+            if (IsProcedureEnd(l.Tokens))
+            {
+                if (!hadContent.TryGetValue(key, out var q)) hadContent[key] = q = new();
+                q.Enqueue((content, headerLine));
+                key = null;
+            }
+            else if (l.Tokens.Count > 0) content = true;
+        }
+
+        for (int i = 0; i < output.Count; i++)
+        {
+            var toks = Lexer.Tokenize(output[i].Text);
+            if (ProcedureKey(toks) is not { } k) continue;
+            int start = i;
+            // satır devamıyla süren başlık
+            while (start + 1 < output.Count && output[start].Text.TrimEnd().EndsWith(" _")) start++;
+            int j = start + 1;
+            while (j < output.Count && output[j].Text.Trim().Length == 0) j++;
+            if (j >= output.Count) break;
+            bool empty = IsProcedureEnd(Lexer.Tokenize(output[j].Text));
+            var (wasFull, line) = hadContent.TryGetValue(k, out var q) && q.Count > 0 ? q.Dequeue() : (false, 0);
+            if (empty && wasFull)
+            {
+                string indent = output[i].Text[..(output[i].Text.Length - output[i].Text.TrimStart().Length)];
+                output.Insert(start + 1, new OutputLine { Text = indent + "    " + EmptiedProcedureComment, Ending = output[start].Ending });
+                j++;
+                Warn(line, $"Yordamın içi tamamen silindi; VB IDE boş yordamı silmesin diye yorum satırı eklendi: {output[i].Text.Trim()}. " +
+                           "Yordam artık bir şey yapmıyor; gerekmiyorsa çağrılarıyla birlikte elle silebilirsiniz.");
+            }
+            i = j;
+        }
+    }
 
     /// <summary>
     /// İsim geçişlerini sayar. Sayılar yalnızca satır numarası etiketi olarak geçtiğinde sayılır: satır başında (tanım)

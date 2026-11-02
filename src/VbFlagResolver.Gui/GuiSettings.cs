@@ -17,8 +17,10 @@ internal sealed class GuiSettings
     /// <summary>Kullanıcının verdiği derleme sabitleri ("DEBUG_MODE=0, X=1").</summary>
     public string Defines { get; set; } = "";
     public bool ResolveDirectives { get; set; } = true;
-    /// <summary>Kaynak klasör (tam yol) → olduğu gibi aktarılacak dosyaların göreli yolları.</summary>
-    public Dictionary<string, List<string>> KeepAsIs { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>Tanımsız #If sabitleri 0 sayılsın (VB davranışı).</summary>
+    public bool UndefinedConstantsAreZero { get; set; } = true;
+    /// <summary>Kaynak klasör (tam yol) → temizlenecek (işaretli) dosyaların göreli yolları; diğerleri olduğu gibi aktarılır.</summary>
+    public Dictionary<string, List<string>> CleanFiles { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     private static string FilePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "VbFlagResolver", "gui-settings.json");
@@ -30,7 +32,7 @@ internal sealed class GuiSettings
             if (File.Exists(FilePath) && JsonSerializer.Deserialize<GuiSettings>(File.ReadAllText(FilePath)) is { } s)
             {
                 // JSON'dan gelen sözlük büyük/küçük harf duyarlıdır; Windows yolları için duyarsız olanla değiştir
-                s.KeepAsIs = new Dictionary<string, List<string>>(s.KeepAsIs ?? [], StringComparer.OrdinalIgnoreCase);
+                s.CleanFiles = new Dictionary<string, List<string>>(s.CleanFiles ?? [], StringComparer.OrdinalIgnoreCase);
                 return s;
             }
         }
@@ -41,11 +43,11 @@ internal sealed class GuiSettings
         return new GuiSettings();
     }
 
-    /// <summary>Bu kaynak klasör için işaretli dosyalar (yoksa boş liste oluşturur).</summary>
-    public List<string> KeepFor(string sourceDir)
+    /// <summary>Bu kaynak klasör için temizlenecek dosyalar (yoksa boş liste oluşturur).</summary>
+    public List<string> CleanFor(string sourceDir)
     {
         string key = Path.GetFullPath(sourceDir).TrimEnd('\\', '/');
-        if (!KeepAsIs.TryGetValue(key, out var list)) KeepAsIs[key] = list = [];
+        if (!CleanFiles.TryGetValue(key, out var list)) CleanFiles[key] = list = [];
         return list;
     }
 

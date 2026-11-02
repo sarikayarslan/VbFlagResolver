@@ -21,6 +21,17 @@ public sealed class ProcessOptions
     /// ("frmEski.frm", "Moduller\*.bas"). Bu dosyalardaki bayrak atamaları yine taranır.
     /// </summary>
     public IReadOnlyCollection<string> KeepAsIs { get; init; } = [];
+    /// <summary>
+    /// Verilirse yalnızca bu desenlere uyan dosyalar temizlenir, diğerleri olduğu gibi aktarılır (KeepAsIs ile aynı desen
+    /// kuralları). null: tüm kaynak dosyalar işlenir.
+    /// </summary>
+    public IReadOnlyCollection<string>? ProcessOnly { get; init; }
+    /// <summary>Hiçbir yerde tanımlanmamış #If sabitleri VB'deki gibi 0 sayılır; false ise o gruplar olduğu gibi bırakılır.</summary>
+    public bool UndefinedConstantsAreZero { get; init; } = true;
+
+    /// <summary>Bu dosya dönüştürülmeden olduğu gibi mi aktarılacak?</summary>
+    public bool IsKept(string relativePath)
+        => MatchesKeep(relativePath, KeepAsIs) || ProcessOnly != null && !MatchesKeep(relativePath, ProcessOnly);
 
     /// <summary>Göreli yol, KeepAsIs desenlerinden birine uyuyor mu? Eğik çizgi içermeyen desen yalnızca dosya adına bakar.</summary>
     public static bool MatchesKeep(string relativePath, IEnumerable<string> patterns)
@@ -62,6 +73,7 @@ public static class ProjectProcessor
         // 0) koşullu derleme sabitleri: .vbp CondComp + kullanıcı
         var constNotes = new List<SourceNote>();
         var consts = CondConstants.FromProject(src, o.Defines, constNotes, o.CodePage);
+        consts.UndefinedIsZero = o.UndefinedConstantsAreZero;
         report.Constants = consts;
         report.ResolveDirectives = o.ResolveDirectives;
         report.FlagNotes.AddRange(constNotes);
@@ -122,9 +134,9 @@ public static class ProjectProcessor
         var rewriter = new Rewriter(flagResult.Flags, moduleNames, consts, o.ResolveDirectives);
         foreach (var (rel, file) in sources)
         {
-            if (ProcessOptions.MatchesKeep(rel, o.KeepAsIs))
+            if (o.IsKept(rel))
             {
-                // işaretli: dönüştürülmez, bayt bayt aynen yazılır
+                // olduğu gibi aktarılacak: dönüştürülmez, bayt bayt aynen yazılır
                 report.Files.Add(new FileReport
                 {
                     RelativePath = rel, KeptAsIs = true, OriginalBytes = file.OriginalBytes, OutputBytes = file.OriginalBytes,
@@ -134,7 +146,7 @@ public static class ProjectProcessor
                              .Select(t => flagResult.Flags.Get(t.Text)!.Name).Distinct(StringComparer.OrdinalIgnoreCase))
                     report.FlagUsage[name] = report.FlagUsage.GetValueOrDefault(name) + 1;
                 outputs.Add((rel, file.OriginalBytes));
-                log?.Invoke($"  {rel}: olduğu gibi aktarıldı (işaretli)");
+                log?.Invoke($"  {rel}: olduğu gibi aktarıldı");
                 continue;
             }
             var r = rewriter.Rewrite(file, rel);

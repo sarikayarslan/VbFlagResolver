@@ -13,15 +13,18 @@ internal static class DiffRtf
         @"\red128\green128\blue128;\red160\green0\blue0;\red0\green110\blue0;\red40\green60\blue120;}" +
         @"\f0\fs18 ";
 
-    public static string Build(string original, string output, bool allLines)
+    /// <param name="oldLineAt">Her görüntü satırı için orijinal satır numarası (başlık, boşluk ve eklenen satırlarda 0).</param>
+    public static string Build(string original, string output, bool allLines, out List<int> oldLineAt)
     {
         var diff = LineDiff.Compute(LineDiff.SplitLines(original), LineDiff.SplitLines(output));
         var sb = new StringBuilder(Header);
+        oldLineAt = [];
         if (diff.All(d => d.Kind == DiffKind.Same))
         {
             sb.Append(@"\cf4 ");
             Escape(sb, "Bu dosyada değişiklik yok.");
             sb.Append(@"\par}");
+            oldLineAt.Add(0);
             return sb.ToString();
         }
 
@@ -34,6 +37,7 @@ internal static class DiffRtf
                 sb.Append(@"\highlight3\cf7 ");
                 Escape(sb, $"@@ orijinal satır {Math.Max(first.OldNo, 1)}, yeni satır {Math.Max(first.NewNo, 1)} @@");
                 sb.Append(@"\highlight0\cf0\par").AppendLine();
+                oldLineAt.Add(0);
             }
             foreach (var l in hunk)
             {
@@ -49,8 +53,9 @@ internal static class DiffRtf
                 if (l.Kind == DiffKind.Same) sb.Append(@"\cf0 ");
                 Escape(sb, (l.Kind switch { DiffKind.Removed => "- ", DiffKind.Added => "+ ", _ => "  " }) + l.Text);
                 sb.Append(@"\highlight0\cf0\par").AppendLine();
+                oldLineAt.Add(l.Kind == DiffKind.Added ? 0 : l.OldNo);
             }
-            if (!allLines) sb.Append(@"\par").AppendLine();
+            if (!allLines) { sb.Append(@"\par").AppendLine(); oldLineAt.Add(0); }
         }
         sb.Append('}');
         return sb.ToString();

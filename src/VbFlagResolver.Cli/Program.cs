@@ -27,9 +27,11 @@ internal static class Program
           --define <sabitler>    #If için derleme sabitleri, ör. DEBUG_MODE=0,YENI=1. .vbp'deki CondComp değerlerini ezer
                                  (dosya içindeki #Const satırları o dosyada yine geçerlidir).
           --no-directives        #If gruplarını çözme; #If içindeki bayrak tanımları/atamaları Bilinmiyor sayılır.
+          --undefined-unknown    Hiçbir yerde tanımlanmamış #If sabitini 0 sayma (VB'nin davranışı); o grubu olduğu gibi bırak.
           --ext <uzantılar>      İşlenecek uzantılar, virgülle. Varsayılan: .frm,.bas,.cls,.ctl,.dob,.pag
           --keep <dosyalar>      Dönüştürülmeden olduğu gibi aktarılacak dosyalar, virgülle; göreli yol veya dosya adı,
                                  * ve ? kullanılabilir (ör. frmEski.frm,Moduller\*.bas). Tekrar verilebilir.
+          --only <dosyalar>      Yalnızca bu dosyaları temizle, diğerlerini olduğu gibi aktar (--keep ile aynı desenler).
           --no-copy              Kaynak olmayan dosyaları (.frx, .vbp, ...) çıktıya kopyalama.
           --codepage <n>         Kaynak kod sayfası. Varsayılan: 1254
           -h, --help             Bu yardımı göster.
@@ -42,11 +44,12 @@ internal static class Program
         try { Console.OutputEncoding = Encoding.UTF8; } catch { /* yönlendirilmiş çıktı */ }
 
         string? flags = null, src = null, outDir = null, reportPath = null, defines = null;
-        bool dryRun = false, noCopy = false, unassignedUnknown = false, noDirectives = false;
+        bool dryRun = false, noCopy = false, unassignedUnknown = false, noDirectives = false, undefinedUnknown = false;
         var mode = FlagReadMode.Auto;
         string[]? initProcs = null;
         string[]? exts = null;
         var keep = new List<string>();
+        List<string>? only = null;
         int codePage = 1254;
 
         try
@@ -66,6 +69,7 @@ internal static class Program
                     case "--unassigned-unknown": unassignedUnknown = true; break;
                     case "--define": defines = defines == null ? Next() : defines + "," + Next(); break;
                     case "--no-directives": noDirectives = true; break;
+                    case "--undefined-unknown": undefinedUnknown = true; break;
                     case "--flag-mode":
                         mode = Next().ToLowerInvariant() switch
                         {
@@ -78,6 +82,7 @@ internal static class Program
                     case "--init-proc": initProcs = SplitList(Next()); break;
                     case "--ext": exts = SplitList(Next()).Select(e => e.StartsWith('.') ? e : "." + e).ToArray(); break;
                     case "--keep": keep.AddRange(SplitList(Next())); break;
+                    case "--only": (only ??= []).AddRange(SplitList(Next())); break;
                     case "--codepage":
                         var cp = Next();
                         if (!int.TryParse(cp, out codePage)) throw new ArgumentException($"Geçersiz --codepage: {cp}");
@@ -121,6 +126,8 @@ internal static class Program
                 FlagOptions = new FlagReaderOptions { Mode = mode, InitProcedures = initProcs, UnassignedVariableIsFalse = !unassignedUnknown },
                 Extensions = exts ?? new ProcessOptions { FlagsPath = "", SourceDir = "" }.Extensions,
                 KeepAsIs = keep,
+                ProcessOnly = only,
+                UndefinedConstantsAreZero = !undefinedUnknown,
             };
             // rapor da orijinal dosyaların üzerine yazılamaz; dönüşümden önce kontrol et
             if (reportPath != null) new WriteGuard(Path.GetFullPath(src), Path.GetFullPath(flags)).CheckFile(reportPath);

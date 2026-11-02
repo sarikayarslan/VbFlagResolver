@@ -22,9 +22,15 @@ public sealed class CondConstants
 
     public bool Contains(string name) => _values.ContainsKey(name);
 
+    /// <summary>
+    /// true: hiçbir yerde tanımlanmamış sabit VB'deki gibi 0 (False) sayılır. false: bilinmiyor sayılır ve
+    /// o #If grubu olduğu gibi bırakılır (sabit listesi eksik olabilir diye temkinli davranış).
+    /// </summary>
+    public bool UndefinedIsZero { get; set; }
+
     public CondConstants Clone()
     {
-        var c = new CondConstants();
+        var c = new CondConstants { UndefinedIsZero = UndefinedIsZero };
         foreach (var (k, v) in _values) c._values[k] = v;
         return c;
     }
@@ -361,7 +367,7 @@ public sealed class DirectiveEvaluator
                 if (t.Is("Empty")) return DValue.Num(0);
                 if (_consts.TryGet(t.Text, out var value)) return value ?? DValue.Unknown;
                 _undefined.Add(t.Text);
-                return DValue.Unknown;
+                return _consts.UndefinedIsZero ? DValue.Num(0) : DValue.Unknown; // VB: tanımsız sabit Empty → 0
             default:
                 throw new FormatException();
         }
@@ -560,6 +566,8 @@ public static class DirectiveResolver
                 : chosen == g.Branches[0] ? "#If dalı kaldı"
                 : chosen.Condition == null ? "#Else dalı kaldı"
                 : $"#ElseIf {CondText(chosen)} dalı kaldı";
+            if (undefinedAll.Count > 0)
+                what += $" (tanımsız sabit 0 sayıldı: {string.Join(", ", undefinedAll.Distinct(StringComparer.OrdinalIgnoreCase))})";
             r.Changes.Add(new ChangeRecord(g.Branches[0].Header.LineNumber, ChangeKind.DirectiveResolved, $"#If {condText} → {what}"));
             if (chosen != null) Walk(chosen.Body, consts, resolve, conditional, r, fileName);
         }
