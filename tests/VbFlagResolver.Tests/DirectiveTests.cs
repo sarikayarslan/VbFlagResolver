@@ -33,6 +33,8 @@ public class DirectiveTests
     [InlineData("B And C", false)]    // 0 And x = 0
     [InlineData("False", false)]
     [InlineData("A Xor 1", false)]
+    [InlineData("Win32", true)]                // VB5/VB6 yerleşik sabitleri
+    [InlineData("Win16", false)]
     [InlineData("&HFFFF = -1", true)]          // VB: işaretli Integer
     [InlineData("&HFFFF& = 65535", true)]      // & eki: Long
     [InlineData("&H8000 < 0", true)]

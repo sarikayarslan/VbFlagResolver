@@ -353,8 +353,10 @@ internal sealed class MainForm : Form
         _lvFiles.SelectedIndexChanged += (_, _) => ShowSelectedFile();
         bool doubleClick = false;
         _lvFiles.MouseDown += (_, e) => { _lastFileListInput = DateTime.UtcNow; doubleClick = e.Clicks > 1; };
+        _lvFiles.MouseUp += (_, _) => doubleClick = false;
         // ListView çift tıklamada işareti değiştirir; dosyaya bakmak için çift tıklayan kullanıcı yanlışlıkla işaretlemesin
-        _lvFiles.ItemCheck += (_, e) => { if (doubleClick) e.NewValue = e.CurrentValue; };
+        // (programın kendi yaptığı toplu seçim etkilenmesin)
+        _lvFiles.ItemCheck += (_, e) => { if (doubleClick && !_fillingFiles) e.NewValue = e.CurrentValue; };
         _lvFiles.KeyDown += (_, e) => { if (e.KeyCode == Keys.Space) _lastFileListInput = DateTime.UtcNow; };
         _lvFiles.ItemChecked += (_, e) => ToggleClean(e.Item);
         _btnSelectChanged.Click += (_, _) => SetSelection(f => f.Changed);
@@ -537,10 +539,11 @@ internal sealed class MainForm : Form
         {
             SetBusy(false, null);
         }
+        // önizleme sürerken seçim değiştiyse bir kez daha önizle; dönüştürme sonucunu ise önizlemeyle ezme
         if (_rerunPreviewWhenIdle)
         {
             _rerunPreviewWhenIdle = false;
-            await RunAsync(dryRun: true);
+            if (dryRun) await RunAsync(dryRun: true);
         }
     }
 
@@ -660,8 +663,12 @@ internal sealed class MainForm : Form
            && _settings.CleanFor(_txtSrc.Text.Trim()).Any(k => k.Equals(rel, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>Temizlenecek dosyalar (bu kaynak klasör için kayıtlı seçim).</summary>
+    /// <summary>
+    /// Temizlenecek dosyalar (bu kaynak klasör için kayıtlı seçim), Core'a desen olarak verilecek biçimde: ".\" öneki
+    /// tam göreli yol eşlemesi yapar; yoksa "modA.bas" alt klasördeki aynı adlı dosyaya da uyardı.
+    /// </summary>
     private List<string> SelectedFiles()
-        => Directory.Exists(_txtSrc.Text.Trim()) ? _settings.CleanFor(_txtSrc.Text.Trim()).ToList() : [];
+        => Directory.Exists(_txtSrc.Text.Trim()) ? _settings.CleanFor(_txtSrc.Text.Trim()).Select(r => ".\\" + r).ToList() : [];
 
     private void UpdateSelectionInfo()
     {
@@ -725,7 +732,7 @@ internal sealed class MainForm : Form
         if (!_chkRemoveUnusedForms.Checked || _report == null) return;
         _reportIsCurrent = false;
         if (_btnPreview.Enabled) _ = RunAsync(dryRun: true);
-        else _rerunPreviewWhenIdle = true; // bir işlem sürüyor: bitince bir kez daha önizle
+        else if (_progress.Visible) _rerunPreviewWhenIdle = true; // bir işlem sürüyor: bitince bir kez daha önizle
     }
 
     private bool _rerunPreviewWhenIdle;

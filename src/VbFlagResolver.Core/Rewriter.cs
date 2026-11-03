@@ -98,7 +98,7 @@ public sealed class Rewriter
             return new RewriteResult { Output = file.OriginalBytes, Changed = false, Report = _report, FlagReferences = refs };
 
         CheckRemovedDeclarations(output);
-        KeepEmptiedProcedures(logical, output);
+        KeepEmptiedProcedures(logical, dr.Kept.ToHashSet(), output);
         _report.Changed = true;
         _report.RemovedLines = _code.Count - output.Count;
 
@@ -231,7 +231,7 @@ public sealed class Rewriter
 
         _changed = true;
         _report.Changes.Add(new ChangeRecord(c.Line.LineNumber, ChangeKind.SingleLineIf, desc));
-        if (newText != null) o.Add(new OutputLine { Text = newText, Ending = LastEnding(c) });
+        if (newText != null) EmitRewritten(c, newText, o);
     }
 
     private void EmitIf(IfBlock blk, List<OutputLine> o)
@@ -326,7 +326,7 @@ public sealed class Rewriter
             else
             {
                 var text = BuildHeader(b.Header, newKind, r);
-                o.Add(new OutputLine { Text = text, Ending = LastEnding(b.Header) });
+                EmitRewritten(b.Header, text, o);
                 parts.Add(text.Trim());
             }
             EmitNodes(b.Body, o);
@@ -371,8 +371,56 @@ public sealed class Rewriter
 
     private void HeaderComment(ClassifiedLine h, List<OutputLine> o)
     {
-        if (h.Comment is { } c)
-            o.Add(new OutputLine { Text = h.Line.Indent + h.Line.Text[c.Start..].TrimEnd(), Ending = LastEnding(h) });
+        if (h.Comment is not { } c) return;
+        if (CommentContinuation(h) is var (first, rest))
+        {
+            o.Add(new OutputLine { Text = h.Line.Indent + first, Ending = PhysicalBefore(h, rest[0]).Ending });
+            o.AddRange(rest.Select(OutputLine.From));
+            return;
+        }
+        o.Add(new OutputLine { Text = h.Line.Indent + h.Line.Text[c.Start..].TrimEnd(), Ending = LastEnding(h) });
+    }
+
+    /// <summary>
+    /// VB'de " _" ile biten yorum sonraki satıra devam eder; mantıksal satır bunları birleştirir. Yorum bir fiziksel
+    /// satırda başlayıp sonrakilere taşıyorsa (yorumun ilk satırdaki kısmı, devam eden fiziksel satırlar), değilse null.
+    /// </summary>
+    private (string First, List<PhysicalLine> Tail)? CommentContinuation(ClassifiedLine c)
+    {
+        if (c.Line.Count < 2 || c.Comment == null) return null;
+        var phys = Physical(c).ToList();
+        for (int k = 0; k < phys.Count - 1; k++)
+        {
+            if (Lexer.Comment(Lexer.Tokenize(phys[k].Text)) is not { } cm) continue;
+            return (phys[k].Text[cm.Start..].TrimEnd(), phys.Skip(k + 1).ToList());
+        }
+        return null;
+    }
+
+    private PhysicalLine PhysicalBefore(ClassifiedLine c, PhysicalLine p)
+    {
+        var phys = Physical(c).ToList();
+        return phys[Math.Max(0, phys.IndexOf(p) - 1)];
+    }
+
+    /// <summary>
+    /// Mantıksal satırdan yeniden üretilmiş metni yazar. Satır sonundaki yorum " _" ile alt satırlara devam ediyorsa
+    /// birleştirilmiş yorum yerine yorumun ilk satırı ve devam satırları aynen yazılır.
+    /// </summary>
+    private void EmitRewritten(ClassifiedLine c, string newText, List<OutputLine> o)
+    {
+        if (c.Comment is { } cm && CommentContinuation(c) is var (first, rest))
+        {
+            string merged = c.Line.Text[cm.Start..].TrimEnd();
+            string t = newText.TrimEnd();
+            if (t.EndsWith(merged, StringComparison.Ordinal))
+            {
+                o.Add(new OutputLine { Text = t[..^merged.Length] + first, Ending = PhysicalBefore(c, rest[0]).Ending });
+                o.AddRange(rest.Select(OutputLine.From));
+                return;
+            }
+        }
+        o.Add(new OutputLine { Text = newText, Ending = LastEnding(c) });
     }
 
     private static IEnumerable<ClassifiedLine> BranchLines(Branch b)
@@ -575,6 +623,14 @@ public sealed class Rewriter
         return string.Join(" ", t.Skip(k).Take(name - k + 1).Select(x => x.Text.ToLowerInvariant()));
     }
 
+    /// <summary>"Sub X(): y = 1" — başlık satırında ':' sonrası ifade de yordamın içeriğidir.</summary>
+    private static bool HeaderHasStatement(List<Token> t)
+    {
+        var code = t.Where(x => x.Kind != TokenKind.Comment).ToList();
+        int colon = code.FindIndex(x => x.Text == ":");
+        return colon >= 0 && colon < code.Count - 1;
+    }
+
     private static bool IsProcedureEnd(List<Token> t)
         => t.Count > 1 && t[0].Is("End") && (t[1].Is("Sub") || t[1].Is("Function") || t[1].Is("Property"));
 
@@ -582,9 +638,12 @@ public sealed class Rewriter
     /// Orijinalde içi dolu olup temizlikten sonra hiç satırı kalmayan yordamlara yorum satırı ekler; yoksa VB IDE
     /// yordamı siler ve çağrıldığı yerler derlenmez.
     /// </summary>
-    private void KeepEmptiedProcedures(IReadOnlyList<LogicalLine> original, List<OutputLine> output)
+    private void KeepEmptiedProcedures(IReadOnlyList<LogicalLine> original, IReadOnlyCollection<LogicalLine> compiled, List<OutputLine> output)
     {
-        // orijinalde içinde en az bir satır (kod veya yorum) olan yordamlar; aynı adlılar sırayla sayılır
+        // orijinalde içinde en az bir satır (kod veya yorum) olan yordamlar; aynı adlılar sırayla sayılır.
+        // Yalnızca derlenen (#If ile silinmeyen) başlık ve End satırları sayılır: iki #If dalında aynı adlı yordam olabilir.
+        // İçerik ise #If ile silinen satırları da kapsar (yordam #If yüzünden boşalmış olabilir); #If satırlarının kendisi sayılmaz.
+        var kept = compiled as ISet<LogicalLine> ?? compiled.ToHashSet();
         var hadContent = new Dictionary<string, Queue<(bool Content, int Line)>>();
         string? key = null;
         bool content = false;
@@ -593,16 +652,22 @@ public sealed class Rewriter
         {
             if (key == null)
             {
-                if (ProcedureKey(l.Tokens) is { } k) { key = k; content = false; headerLine = l.LineNumber; }
+                if (kept.Contains(l) && ProcedureKey(l.Tokens) is { } k)
+                {
+                    key = k;
+                    headerLine = l.LineNumber;
+                    content = HeaderHasStatement(l.Tokens);
+                }
                 continue;
             }
             if (IsProcedureEnd(l.Tokens))
             {
+                if (!kept.Contains(l)) continue; // derlenmeyen daldaki başka bir yordamın sonu
                 if (!hadContent.TryGetValue(key, out var q)) hadContent[key] = q = new();
                 q.Enqueue((content, headerLine));
                 key = null;
             }
-            else if (l.Tokens.Count > 0) content = true;
+            else if (l.Tokens.Count > 0 && l.Tokens[0].Kind != TokenKind.Directive && ProcedureKey(l.Tokens) == null) content = true;
         }
 
         for (int i = 0; i < output.Count; i++)
@@ -615,7 +680,7 @@ public sealed class Rewriter
             int j = start + 1;
             while (j < output.Count && output[j].Text.Trim().Length == 0) j++;
             if (j >= output.Count) break;
-            bool empty = IsProcedureEnd(Lexer.Tokenize(output[j].Text));
+            bool empty = IsProcedureEnd(Lexer.Tokenize(output[j].Text)) && !HeaderHasStatement(toks);
             var (wasFull, line) = hadContent.TryGetValue(k, out var q) && q.Count > 0 ? q.Dequeue() : (false, 0);
             if (empty && wasFull)
             {

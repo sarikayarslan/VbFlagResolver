@@ -37,15 +37,21 @@ public sealed class ProcessOptions
     public bool IsKept(string relativePath)
         => MatchesKeep(relativePath, KeepAsIs) || ProcessOnly != null && !MatchesKeep(relativePath, ProcessOnly);
 
-    /// <summary>Göreli yol, KeepAsIs desenlerinden birine uyuyor mu? Eğik çizgi içermeyen desen yalnızca dosya adına bakar.</summary>
+    /// <summary>
+    /// Göreli yol desenlerden birine uyuyor mu? Eğik çizgi içermeyen desen yalnızca dosya adına bakar (alt klasörlerde de
+    /// eşleşir); ".\" ile başlayan veya eğik çizgi içeren desen kaynak klasöre göre göreli yolun tamamına bakar.
+    /// </summary>
     public static bool MatchesKeep(string relativePath, IEnumerable<string> patterns)
     {
         string rel = relativePath.Replace('/', '\\');
         foreach (var raw in patterns)
         {
-            var p = raw.Trim().Replace('/', '\\').TrimStart('.', '\\');
+            var p = raw.Trim().Replace('/', '\\');
+            bool rooted = p.StartsWith(".\\", StringComparison.Ordinal);
+            if (rooted) p = p[2..];
+            p = p.TrimStart('\\');
             if (p.Length == 0) continue;
-            string target = p.Contains('\\') ? rel : Path.GetFileName(rel);
+            string target = rooted || p.Contains('\\') ? rel : Path.GetFileName(rel);
             var regex = "^" + System.Text.RegularExpressions.Regex.Escape(p).Replace(@"\*", ".*").Replace(@"\?", ".") + "$";
             if (System.Text.RegularExpressions.Regex.IsMatch(target, regex, System.Text.RegularExpressions.RegexOptions.IgnoreCase))
                 return true;
@@ -175,11 +181,22 @@ public static class ProjectProcessor
                 var outBytes = outputs.First(x => x.Rel == rel).Bytes;
                 analysis.Add((rel, cleaned ? VbSourceFile.FromBytes(file.Path, outBytes, o.CodePage) : file));
             }
-            // bayrak dosyası dönüştürülmez ama içinden form açılabilir (ör. InitFlags içinde frmX.Show)
-            analysis.Add((Path.GetFileName(flagsPath), VbSourceFile.Load(flagsPath, o.CodePage)));
+            // işlenmeyen kod dosyaları (--ext dışı, bayrak dosyası) dönüştürülmez ama içlerinden form açılabilir:
+            // kök sayılırlar ve hiçbiri çıkarılmaz. Olduğu gibi aktarılan (--keep) dosyalar da korunur.
+            var protectedRels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (rel, _) in sources)
+                if (ProcessOptions.MatchesKeep(rel, o.KeepAsIs)) protectedRels.Add(rel);
+            string[] codeExts = [".frm", ".bas", ".cls", ".ctl", ".dob", ".pag", ".dsr"];
+            foreach (var f in others.Where(f => codeExts.Contains(Path.GetExtension(f), StringComparer.OrdinalIgnoreCase)))
+            {
+                var rel = Path.GetRelativePath(src, f);
+                analysis.Add((rel, VbSourceFile.Load(f, o.CodePage)));
+                protectedRels.Add(rel);
+            }
+            if (!IsUnder(flagsPath, src)) analysis.Add((Path.GetFileName(flagsPath), VbSourceFile.Load(flagsPath, o.CodePage)));
             var vbps = others.Where(f => Path.GetExtension(f).Equals(".vbp", StringComparison.OrdinalIgnoreCase))
                 .Select(f => (Path.GetRelativePath(src, f), File.ReadAllBytes(f))).ToList();
-            var (removed, formNotes) = UnusedForms.Find(analysis, vbps, o.CodePage);
+            var (removed, formNotes) = UnusedForms.Find(analysis, vbps, o.CodePage, src, protectedRels);
             report.RemovedForms.AddRange(removed);
             report.FormNotes.AddRange(formNotes);
             foreach (var r in removed)
@@ -222,8 +239,10 @@ public static class ProjectProcessor
         int start = 0;
         while (start < data.Length)
         {
-            int nl = Array.IndexOf(data, (byte)'\n', start);
-            int end = nl < 0 ? data.Length : nl + 1;
+            // satır sonu: CRLF, LF veya yalnız CR
+            int end = start;
+            while (end < data.Length && data[end] != '\n' && data[end] != '\r') end++;
+            if (end < data.Length) end += data[end] == '\r' && end + 1 < data.Length && data[end + 1] == '\n' ? 2 : 1;
             var text = enc.GetString(data, start, end - start).Trim();
             bool drop = false;
             int eq = text.IndexOf('=');

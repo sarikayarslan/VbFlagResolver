@@ -15,9 +15,13 @@ public static class UnusedForms
     }
 
     /// <param name="sources">(göreli yol, dosya içeriği: temizlenmişse çıktı baytları, değilse orijinal)</param>
+    /// <param name="sourceDir">Göreli yolların kökü (.vbp'deki Form= yollarını çözmek için).</param>
+    /// <param name="protectedRels">Hiçbir zaman çıkarılmayacak ve kök sayılacak kaynaklar (ör. olduğu gibi aktarılan formlar).</param>
     public static (List<RemovedForm> Removed, List<SourceNote> Notes) Find(
-        IReadOnlyList<(string Rel, VbSourceFile File)> sources, IReadOnlyList<(string Rel, byte[] Bytes)> vbpFiles, int codePage)
+        IReadOnlyList<(string Rel, VbSourceFile File)> sources, IReadOnlyList<(string Rel, byte[] Bytes)> vbpFiles, int codePage,
+        string sourceDir, ISet<string>? protectedRels = null)
     {
+        protectedRels ??= new HashSet<string>();
         var infos = new List<Info>();
         foreach (var (rel, file) in sources)
         {
@@ -35,17 +39,25 @@ public static class UnusedForms
             ? Path.GetFileNameWithoutExtension(i.Rel) : i.File.ModuleName;
         var forms = infos.Where(i => Path.GetExtension(i.Rel).Equals(".frm", StringComparison.OrdinalIgnoreCase)).ToList();
 
-        // başlangıç formları
+        // başlangıç formları ve .vbp'lerde listelenen formlar (yalnızca bunlar çıkarılabilir)
         var startup = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var listed = new HashSet<string>(StringComparer.OrdinalIgnoreCase); // tam yollar
         var enc = VbSourceFile.GetEncoding(codePage);
-        foreach (var (_, bytes) in vbpFiles)
-            foreach (var raw in enc.GetString(bytes).Split('\n'))
+        foreach (var (vbpRel, bytes) in vbpFiles)
+        {
+            string vbpDir = Path.GetDirectoryName(Path.GetFullPath(Path.Combine(sourceDir, vbpRel)))!;
+            foreach (var raw in enc.GetString(bytes).Split(["\r\n", "\r", "\n"], StringSplitOptions.None))
             {
                 var line = raw.Trim();
                 int eq = line.IndexOf('=');
-                if (eq > 0 && line[..eq].Trim().Equals("Startup", StringComparison.OrdinalIgnoreCase))
-                    startup.Add(line[(eq + 1)..].Trim().Trim('"'));
+                if (eq <= 0) continue;
+                string key = line[..eq].Trim(), value = line[(eq + 1)..].Trim().Trim('"');
+                if (key.Equals("Startup", StringComparison.OrdinalIgnoreCase)) startup.Add(value);
+                else if (key.Equals("Form", StringComparison.OrdinalIgnoreCase))
+                    try { listed.Add(Path.GetFullPath(Path.Combine(vbpDir, value))); } catch (ArgumentException) { }
             }
+        }
+        bool IsCandidate(Info f) => !protectedRels.Contains(f.Rel) && listed.Contains(Path.GetFullPath(Path.Combine(sourceDir, f.Rel)));
 
         // MDI
         bool IsHeader(Info i, Func<string, bool> pred) => i.File.Lines.Take(i.File.HeaderLineCount).Any(l => pred(l.Text.Trim()));
@@ -73,7 +85,8 @@ public static class UnusedForms
         // Canlı bir kaynaktan adıyla (veya string içinde) geçen form canlı olur. Yalnızca birbirini çağıran
         // kullanılmayan formlar (A ↔ B) böylece canlı kalmaz.
         var formSet = forms.ToHashSet();
-        var alive = new HashSet<Info>(infos.Where(i => !formSet.Contains(i) || startup.Contains(NameOf(i))));
+        // .vbp'de listelenmeyen veya korunan formlar da çıkarılmaz ve kök sayılır
+        var alive = new HashSet<Info>(infos.Where(i => !formSet.Contains(i) || startup.Contains(NameOf(i)) || !IsCandidate(i)));
         var noted = new HashSet<Info>();
         var regex = forms.ToDictionary(f => f, f => new Regex($@"\b{Regex.Escape(NameOf(f))}\b", RegexOptions.IgnoreCase));
         bool changed = true;

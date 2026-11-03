@@ -296,6 +296,49 @@ public class ProjectProcessorTests
     private const string MainWithDeadRef = "Sub A()\r\n    If F1 Then\r\n        frmEski.Show\r\n    End If\r\nEnd Sub\r\n";
 
     [Fact]
+    public void Form_used_from_file_outside_ext_filter_is_kept()
+    {
+        var (src, _) = UnusedProject(UnusedVbp, ("frmMain.frm", FormFile("frmMain", "")), ("frmEski.frm", FormFile("frmEski", "")));
+        File.WriteAllText(Path.Combine(src, "modA.bas"), "Attribute VB_Name = \"modA\"\r\nSub X()\r\n    frmEski.Show\r\nEnd Sub\r\n");
+        var o = UnusedOptions(src, null, dryRun: true);
+        var report = ProjectProcessor.Run(new ProcessOptions
+        {
+            FlagsPath = o.FlagsPath, SourceDir = src, DryRun = true, RemoveUnusedForms = true, Extensions = [".frm"],
+        });
+        Assert.Empty(report.RemovedForms);
+    }
+
+    [Fact]
+    public void Form_not_listed_in_vbp_or_kept_as_is_is_not_removed()
+    {
+        var (src, _) = UnusedProject("Type=Exe\r\nForm=frmMain.frm\r\nForm=frmKeep.frm\r\nStartup=\"frmMain\"\r\n",
+            ("frmMain.frm", FormFile("frmMain", "")), ("frmLoose.frm", FormFile("frmLoose", "")), ("frmKeep.frm", FormFile("frmKeep", "")));
+        var report = ProjectProcessor.Run(new ProcessOptions
+        {
+            FlagsPath = Path.Combine(src, "mFlags.bas"), SourceDir = src, DryRun = true, RemoveUnusedForms = true, KeepAsIs = ["frmKeep.frm"],
+        });
+        Assert.Empty(report.RemovedForms); // frmLoose .vbp'de yok, frmKeep olduğu gibi aktarılıyor
+    }
+
+    [Fact]
+    public void Cr_only_vbp_is_parsed_and_stripped()
+    {
+        var vbp = "Type=Exe\rForm=frmMain.frm\rForm=frmEski.frm\rStartup=\"frmMain\"\r";
+        var (src, outDir) = UnusedProject(vbp, ("frmMain.frm", FormFile("frmMain", "")), ("frmEski.frm", FormFile("frmEski", "")));
+        var report = ProjectProcessor.Run(UnusedOptions(src, outDir));
+        Assert.Equal(["frmEski.frm"], report.RemovedForms.Select(r => r.RelativePath));
+        Assert.Equal("Type=Exe\rForm=frmMain.frm\rStartup=\"frmMain\"\r", File.ReadAllText(Path.Combine(outDir, "Proje.vbp")));
+    }
+
+    [Theory]
+    [InlineData(".\\modA.bas", "modA.bas", true)]
+    [InlineData(".\\modA.bas", "Eski\\modA.bas", false)]   // arayüz seçimi: tam göreli yol
+    [InlineData("modA.bas", "Eski\\modA.bas", true)]       // komut satırı: yalnızca dosya adı
+    [InlineData(".\\.gizli.bas", ".gizli.bas", true)]      // nokta ile başlayan ad
+    public void Rooted_patterns_match_full_relative_path(string pattern, string rel, bool expected)
+        => Assert.Equal(expected, ProcessOptions.MatchesKeep(rel, [pattern]));
+
+    [Fact]
     public void Unused_forms_referencing_each_other_are_both_removed()
     {
         var (src, _) = UnusedProject("Type=Exe\r\nForm=frmMain.frm\r\nForm=frmA.frm\r\nForm=frmB.frm\r\nStartup=\"frmMain\"\r\n",

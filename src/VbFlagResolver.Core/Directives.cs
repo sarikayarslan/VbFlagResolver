@@ -366,6 +366,9 @@ public sealed class DirectiveEvaluator
                 if (t.Is("False")) return DValue.Bool(false);
                 if (t.Is("Empty")) return DValue.Num(0);
                 if (_consts.TryGet(t.Text, out var value)) return value ?? DValue.Unknown;
+                // VB5/VB6'nın yerleşik derleme sabitleri (kullanıcı tanımlarsa onunki geçerli)
+                if (t.Is("Win32")) return DValue.Bool(true);
+                if (t.Is("Win16")) return DValue.Bool(false);
                 _undefined.Add(t.Text);
                 return _consts.UndefinedIsZero ? DValue.Num(0) : DValue.Unknown; // VB: tanımsız sabit Empty → 0
             default:
