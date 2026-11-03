@@ -1000,7 +1000,7 @@ internal sealed class MainForm : Form
         if (f.RemovedFromProject)
         {
             string? reason = _report.RemovedForms.FirstOrDefault(r => r.RelativePath == f.RelativePath)?.Reason;
-            _lvDetails.Items.Insert(0, new ListViewItem(["", "", "Bu form projede hiçbir yerde kullanılmıyor: çıktıdaki .vbp'den çıkarılır, .frm/.frx kopyalanmaz. Nedeni: " + reason]) { ForeColor = Color.MediumPurple });
+            _lvDetails.Items.Insert(0, new ListViewItem(["", "", "Bu form projeden çıkarılır: .vbp'deki satırı (varsa) silinir, .frm/.frx çıktıya kopyalanmaz. Nedeni: " + reason]) { ForeColor = Color.MediumPurple });
         }
         else if (_report.KeptForms.FirstOrDefault(k => k.RelativePath == f.RelativePath) is { } keptForm)
         {
