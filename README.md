@@ -310,7 +310,11 @@ Sonuçlar:
 - `Else If x Then` (boşluklu; VB'de Else + iç içe If) satırının bulunduğu blok olduğu gibi bırakılır; içindeki diğer
   If'ler ve dosyanın geri kalanı işlenir.
 - Bir blok açılınca bloğu açan `If`, kalan dalın başlığı ve `End If` satırlarındaki yorumlar kendi satırlarında
-  korunur; silinen dalın başlık yorumu o dalla birlikte silinir.
+  korunur; silinen dalın başlık yorumu o dalla birlikte silinir. Çözülen `#If` / `#ElseIf` / `#Else` / `#End If`
+  satırlarındaki yorumlar için de aynı kural geçerlidir. Tamamen silinen bloğun (ve satırı silinen tek satırlık
+  If'in) yorumları da silinir.
+- Yorum sayılmayanlar doğru ayrılır: string içindeki `'` (`"it's"`), `Rem` ile başlayan adlar (`RemoveItem`).
+  ` _` ile biten yorum satırında VB'deki gibi sonraki satır da yoruma dahildir ve ona dokunulmaz.
 - Girinti, gövdenin başlıktan derin ilk kod satırına göre bir seviye azaltılır; bundan daha az girintili (hatalı
   girintili) satırlara dokunulmaz. Sekme 4 sütun sayılır.
 - Temizlikten sonra içi tamamen boşalan yordama (Sub/Function/Property) bir yorum satırı eklenir ve uyarı verilir:

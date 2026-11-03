@@ -75,6 +75,7 @@ public sealed class Rewriter
         _report.Warnings.AddRange(dr.Warnings);
         _report.Changes.AddRange(dr.Changes);
         if (dr.Changed) _changed = true;
+        _directiveCommentOnly = dr.CommentOnly;
         IndexProcedures(dr.Kept);
 
         List<Node> tree;
@@ -122,8 +123,17 @@ public sealed class Rewriter
 
     private void Verbatim(ClassifiedLine c, List<OutputLine> o)
     {
-        if (!c.Virtual) o.AddRange(Physical(c).Select(OutputLine.From));
+        if (c.Virtual) return;
+        if (_directiveCommentOnly.TryGetValue(c.Line, out var indent) && Lexer.Comment(c.Tokens) is { } cm)
+        {
+            // çözülen #If satırının yalnızca yorumu kalır
+            o.Add(new OutputLine { Text = indent + c.Line.Text[cm.Start..].TrimEnd(), Ending = LastEnding(c) });
+            return;
+        }
+        o.AddRange(Physical(c).Select(OutputLine.From));
     }
+
+    private IReadOnlyDictionary<LogicalLine, string> _directiveCommentOnly = new Dictionary<LogicalLine, string>();
 
     private void Warn(int line, string message, string? text = null)
         => _report.Warnings.Add(new SourceNote(_report.RelativePath, line, message, text));
@@ -369,13 +379,14 @@ public sealed class Rewriter
         => b.Body.SelectMany(BlockParser.AllLines).Prepend(b.Header);
 
     /// <summary>Satırlardaki #If/#Else/#End If kendi içinde dengeli mi?</summary>
-    private static bool DirectivesBalanced(IEnumerable<ClassifiedLine> lines)
+    private bool DirectivesBalanced(IEnumerable<ClassifiedLine> lines)
     {
         int depth = 0;
         foreach (var l in lines)
         {
             var t = l.Tokens;
-            if (t.Count == 0 || t[0].Kind != TokenKind.Directive) continue;
+            // çözülmüş #If satırlarının yalnızca yorumu kalır; yapıya katılmaz
+            if (t.Count == 0 || t[0].Kind != TokenKind.Directive || _directiveCommentOnly.ContainsKey(l.Line)) continue;
             var w = t[0].Text;
             if (w.Equals("#If", StringComparison.OrdinalIgnoreCase)) depth++;
             else if (w.Equals("#EndIf", StringComparison.OrdinalIgnoreCase) || w.Equals("#End", StringComparison.OrdinalIgnoreCase) && t.Count > 1 && t[1].Is("If"))
@@ -435,6 +446,13 @@ public sealed class Rewriter
                 continue;
             // ölçü, başlıktan derin ilk kod satırıdır; sonraki hatalı girintili satırlar (yarım seviye) ölçüyü bozmasın
             int width = Width(line.Line.Indent);
+            if (width > header) return width - header;
+        }
+        // gövdede kod yoksa (yalnızca yorum) ölçü başlıktan derin ilk yorum satırıdır
+        foreach (var node in b.Body)
+        {
+            if (node is not LineNode { Line: var l } || l.Tokens.Count == 0 || l.Tokens[0].Kind != TokenKind.Comment) continue;
+            int width = Width(l.Line.Indent);
             if (width > header) return width - header;
         }
         return 0;

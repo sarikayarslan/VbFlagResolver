@@ -397,6 +397,11 @@ public sealed class DirectiveResult
     public HashSet<LogicalLine> Conditional { get; } = [];
     /// <summary>Kalan satırı kapsayan çözülemeyen #If koşulu (açıklama için).</summary>
     public Dictionary<LogicalLine, string> ConditionText { get; } = [];
+    /// <summary>
+    /// Çözülüp silinen #If/#ElseIf/#Else/#End If satırlarından yalnızca yorumu kalacak olanlar → yorumun girintisi.
+    /// Bu satırlar Kept içindedir; yazılırken satırın yerine yalnızca yorum yazılır.
+    /// </summary>
+    public Dictionary<LogicalLine, string> CommentOnly { get; } = [];
     public List<ChangeRecord> Changes { get; } = [];
     public List<SourceNote> Warnings { get; } = [];
     /// <summary>#If yapısı bozuksa açıklama; o zaman Kept orijinal satırların tamamıdır.</summary>
@@ -569,7 +574,21 @@ public static class DirectiveResolver
             if (undefinedAll.Count > 0)
                 what += $" (tanımsız sabit 0 sayıldı: {string.Join(", ", undefinedAll.Distinct(StringComparer.OrdinalIgnoreCase))})";
             r.Changes.Add(new ChangeRecord(g.Branches[0].Header.LineNumber, ChangeKind.DirectiveResolved, $"#If {condText} → {what}"));
-            if (chosen != null) Walk(chosen.Body, consts, resolve, conditional, r, fileName);
+            if (chosen != null)
+            {
+                // silinen #If, kalan dalın başlığı ve #End If satırlarındaki yorumlar kendi satırlarında kalır (If bloklarındaki gibi)
+                string indent = chosen.Body.OfType<DLine>().Select(d => d.Line).FirstOrDefault(l => l.Tokens.Count > 0)?.Indent ?? g.Branches[0].Header.Indent;
+                void KeepComment(LogicalLine? l)
+                {
+                    if (l == null || Lexer.Comment(l.Tokens) == null || r.CommentOnly.ContainsKey(l)) return;
+                    r.CommentOnly[l] = indent;
+                    Keep(l, conditional, r);
+                }
+                KeepComment(g.Branches[0].Header);
+                KeepComment(chosen.Header);
+                Walk(chosen.Body, consts, resolve, conditional, r, fileName);
+                KeepComment(g.End);
+            }
         }
     }
 
