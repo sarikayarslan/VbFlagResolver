@@ -14,6 +14,8 @@ internal sealed class GuiSettings
     public int CodePage { get; set; } = 1254;
     public bool UnassignedUnknown { get; set; }
     public bool CopyOtherFiles { get; set; } = true;
+    /// <summary>Projede kullanılmayan formlar çıktıdaki .vbp'den çıkarılsın.</summary>
+    public bool RemoveUnusedForms { get; set; }
     /// <summary>Kullanıcının verdiği derleme sabitleri ("DEBUG_MODE=0, X=1").</summary>
     public string Defines { get; set; } = "";
     public bool ResolveDirectives { get; set; } = true;

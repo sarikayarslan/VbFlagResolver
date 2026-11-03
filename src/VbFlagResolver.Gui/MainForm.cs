@@ -25,6 +25,7 @@ internal sealed class MainForm : Form
     private readonly RadioButton _rbUnassignedUnknown = new() { Text = "Bilinmiyor say — bağlı bloklara dokunulmaz", AutoSize = true };
     private readonly CheckBox _chkCopy = new() { Text = "Diğer dosyaları (.frx, .vbp...) kopyala", AutoSize = true };
     private readonly CheckBox _chkDirectives = new() { Text = "#If bloklarını çöz", AutoSize = true, Checked = true };
+    private readonly CheckBox _chkRemoveUnusedForms = new() { Text = "Kullanılmayan formları projeden çıkar", AutoSize = true };
     private readonly CheckBox _chkUndefinedZero = new() { Text = "Tanımsız sabit = 0", AutoSize = true, Checked = true };
     private readonly TextBox _txtDefines = new() { Width = 300, PlaceholderText = ".vbp'deki CondComp kullanılır; değiştirmek için ör. DEBUG_MODE=0" };
     /// <summary>Bayrak dosyası okunurken kullanılan derleme sabitleri (önizlemeden bağımsız görünüm için).</summary>
@@ -117,6 +118,10 @@ internal sealed class MainForm : Form
             "İşaretli: #If / #ElseIf / #Else / #End If grupları derleme sabitlerine göre çözülür; VB'nin derleyeceği dal kalır,\n" +
             "diğer dallar ve #If satırları silinir. Değeri bilinmeyen sabit içeren grup olduğu gibi bırakılır ve raporlanır.\n" +
             "Boş: #If'lere dokunulmaz; bayrak dosyasında #If içindeki tanım/atamalar Bilinmiyor sayılır.");
+        _toolTip.SetToolTip(_chkRemoveUnusedForms,
+            "İşaretli: projede hiçbir yerde kullanılmayan formlar (yalnızca temizlenen bayrak bloklarından çağrılanlar dahil) çıktıdaki .vbp'den çıkarılır, .frm/.frx çıktıya kopyalanmaz.\n" +
+            "Başlangıç formu, adı string içinde geçen formlar ve kullanılan MDI alt formlarının ana formu korunur.\n" +
+            "Seçilmeyen (temizlenmeyecek) dosyalardaki kullanımlar da sayılır. Önizlemede 'Projeden çıkarılacak' olarak görünür.");
         _toolTip.SetToolTip(_chkUndefinedZero,
             "İşaretli (varsayılan): .vbp'de, Derleme sabitleri alanında veya #Const ile hiç tanımlanmamış bir sabit VB'deki gibi 0 (False)\n" +
             "sayılır; ör. #If ARSLAN = 1 dalı silinir, #Else kalır. Raporda 'tanımsız sabit 0 sayıldı' olarak görünür.\n" +
@@ -178,7 +183,7 @@ internal sealed class MainForm : Form
         var line2 = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
         line2.Controls.AddRange([Lbl("Hiç değer atanmamış Boolean değişken:"), _rbUnassignedFalse, _rbUnassignedUnknown]);
         var line3 = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(8, 0, 0, 0) };
-        line3.Controls.AddRange([_chkDirectives, Lbl("Derleme sabitleri:"), _txtDefines, _chkUndefinedZero, Spacer(16), _chkCopy]);
+        line3.Controls.AddRange([_chkDirectives, Lbl("Derleme sabitleri:"), _txtDefines, _chkUndefinedZero, Spacer(16), _chkCopy, _chkRemoveUnusedForms]);
         var opts = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1 };
         opts.Controls.Add(line1, 0, 0);
         opts.Controls.Add(line2, 0, 1);
@@ -384,6 +389,7 @@ internal sealed class MainForm : Form
             ScheduleFlagRead();
         };
         _chkUndefinedZero.CheckedChanged += (_, _) => ScheduleFlagRead();
+        _chkRemoveUnusedForms.CheckedChanged += (_, _) => _reportIsCurrent = false;
         _txtSrc.TextChanged += (_, _) => { if (File.Exists(_txtFlags.Text.Trim())) ScheduleFlagRead(); }; // .vbp sabitleri kaynaktan gelir
         _flagReadTimer.Tick += (_, _) =>
         {
@@ -476,6 +482,8 @@ internal sealed class MainForm : Form
             Extensions = exts.Length > 0 ? exts : new ProcessOptions { FlagsPath = "", SourceDir = "" }.Extensions,
             // önizleme tüm dosyaları gösterir (neyin değişeceğine bakıp seçmek için); yazarken yalnızca seçililer temizlenir
             ProcessOnly = dryRun ? null : SelectedFiles(),
+            RemoveUnusedForms = _chkRemoveUnusedForms.Checked,
+            UsageSelection = dryRun ? SelectedFiles() : null,
             FlagOptions = new FlagReaderOptions
             {
                 Mode = (FlagReadMode)Math.Max(0, _cmbMode.SelectedIndex),
@@ -529,6 +537,11 @@ internal sealed class MainForm : Form
         {
             SetBusy(false, null);
         }
+        if (_rerunPreviewWhenIdle)
+        {
+            _rerunPreviewWhenIdle = false;
+            await RunAsync(dryRun: true);
+        }
     }
 
     /// <summary>Tüm alanları, seçenekleri ve sonuçları başlangıç durumuna döndürür. Diskteki hiçbir dosyaya dokunmaz.</summary>
@@ -541,6 +554,7 @@ internal sealed class MainForm : Form
         _numCodePage.Value = defaults.CodePage;
         SetUnassignedUnknown(defaults.UnassignedUnknown);
         _chkCopy.Checked = defaults.CopyOtherFiles;
+        _chkRemoveUnusedForms.Checked = defaults.RemoveUnusedForms;
         _txtDefines.Text = defaults.Defines;
         _chkDirectives.Checked = defaults.ResolveDirectives;
         _chkUndefinedZero.Checked = defaults.UndefinedConstantsAreZero;
@@ -622,6 +636,13 @@ internal sealed class MainForm : Form
     {
         var f = (FileReport)item.Tag!;
         bool sel = item.Checked;
+        if (f.RemovedFromProject)
+        {
+            item.SubItems[1].Text = _lastWasDryRun ? "Projeden çıkarılacak" : "Projeden çıkarıldı";
+            item.Font = _lvFiles.Font;
+            item.ForeColor = Color.MediumPurple;
+            return;
+        }
         item.SubItems[1].Text =
             f.Failed ? "HATA"
             : f.KeptAsIs ? "Olduğu gibi"
@@ -648,6 +669,8 @@ internal sealed class MainForm : Form
         int changed = _report.Files.Count(f => f.Changed);
         int selected = _lvFiles.Items.Cast<ListViewItem>().Count(i => i.Checked);
         _lblSelection.Text = $"{selected} dosya temizlenecek; işaretsizler olduğu gibi aktarılır.";
+        if (_report.RemovedForms.Count > 0)
+            _lblSelection.Text += $" {_report.RemovedForms.Count} form projeden {(_lastWasDryRun ? "çıkarılacak" : "çıkarıldı")}.";
         _tabs.TabPages[0].Text = $"Dosyalar ve önizleme ({changed} değişebilir, {selected} seçili)";
     }
 
@@ -667,6 +690,7 @@ internal sealed class MainForm : Form
         StyleFileItem(item);
         UpdateSelectionInfo();
         if (item.Selected) ShowSelectedFile();
+        RerunPreviewIfUsageDepends();
     }
 
     private void SaveSelection(string rel, bool selected)
@@ -692,7 +716,19 @@ internal sealed class MainForm : Form
         _settings.Save();
         UpdateSelectionInfo();
         ShowSelectedFile();
+        RerunPreviewIfUsageDepends();
     }
+
+    /// <summary>Seçim, kullanılmayan form analizini etkilediği için önizlemeyi yeniler.</summary>
+    private void RerunPreviewIfUsageDepends()
+    {
+        if (!_chkRemoveUnusedForms.Checked || _report == null) return;
+        _reportIsCurrent = false;
+        if (_btnPreview.Enabled) _ = RunAsync(dryRun: true);
+        else _rerunPreviewWhenIdle = true; // bir işlem sürüyor: bitince bir kez daha önizle
+    }
+
+    private bool _rerunPreviewWhenIdle;
 
     // ------------------------------------------------------------------ bayraklar
 
@@ -929,8 +965,13 @@ internal sealed class MainForm : Form
             _lvDetails.Items.Add(new ListViewItem(["", "", "Seçilmediği için temizlenmeden olduğu gibi aktarıldı."]) { ForeColor = Color.SteelBlue });
         else if (f.Changed && _lastWasDryRun && !fileItem.Checked)
             _lvDetails.Items.Insert(0, new ListViewItem(["", "", "Seçili değil: Dönüştür'de bu dosya temizlenmeden olduğu gibi aktarılır. Temizlemek için kutusunu işaretleyin."]) { ForeColor = Color.SteelBlue });
-        else if (_lvDetails.Items.Count == 0)
+        else if (_lvDetails.Items.Count == 0 && !f.RemovedFromProject)
             _lvDetails.Items.Add(new ListViewItem(["", "", "Bu dosyada değişiklik veya uyarı yok."]) { ForeColor = Color.Gray });
+        if (f.RemovedFromProject)
+        {
+            string? reason = _report.RemovedForms.FirstOrDefault(r => r.RelativePath == f.RelativePath)?.Reason;
+            _lvDetails.Items.Insert(0, new ListViewItem(["", "", "Bu form projede hiçbir yerde kullanılmıyor: çıktıdaki .vbp'den çıkarılır, .frm/.frx kopyalanmaz. Nedeni: " + reason]) { ForeColor = Color.MediumPurple });
+        }
         _lvDetails.EndUpdate();
 
         // "tüm satırlar" açılarak yeniden çizildiyse istenen satıra git ve ayrıntı satırını yeniden seç
@@ -1027,6 +1068,7 @@ internal sealed class MainForm : Form
         _numCodePage.Value = Math.Clamp(_settings.CodePage, (int)_numCodePage.Minimum, (int)_numCodePage.Maximum);
         SetUnassignedUnknown(_settings.UnassignedUnknown);
         _chkCopy.Checked = _settings.CopyOtherFiles;
+        _chkRemoveUnusedForms.Checked = _settings.RemoveUnusedForms;
         _txtDefines.Text = _settings.Defines;
         _chkDirectives.Checked = _settings.ResolveDirectives;
         _chkUndefinedZero.Checked = _settings.UndefinedConstantsAreZero;
@@ -1050,6 +1092,7 @@ internal sealed class MainForm : Form
         _settings.CodePage = (int)_numCodePage.Value;
         _settings.UnassignedUnknown = _rbUnassignedUnknown.Checked;
         _settings.CopyOtherFiles = _chkCopy.Checked;
+        _settings.RemoveUnusedForms = _chkRemoveUnusedForms.Checked;
         _settings.Defines = _txtDefines.Text.Trim();
         _settings.ResolveDirectives = _chkDirectives.Checked;
         _settings.UndefinedConstantsAreZero = _chkUndefinedZero.Checked;

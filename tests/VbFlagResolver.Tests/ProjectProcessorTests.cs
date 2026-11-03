@@ -267,6 +267,229 @@ public class ProjectProcessorTests
         if (zero) Assert.Contains("tanımsız sabit 0 sayıldı: ARSLAN", report.ToText());
     }
 
+    // ---- kullanılmayan formları çıkarma ----
+
+    private const string UnusedFlags = "Attribute VB_Name = \"mFlags\"\r\nPublic Const T1 = True\r\nPublic Const F1 = False\r\n";
+    private const string UnusedVbp = "Type=Exe\r\nForm=frmMain.frm\r\nForm=frmEski.frm\r\nModule=mFlags; mFlags.bas\r\nStartup=\"frmMain\"\r\n";
+
+    private static string FormFile(string name, string code, string kind = "Form", string extra = "")
+        => $"VERSION 5.00\r\nBegin VB.{kind} {name} \r\n   Caption = \"{name}\"\r\n{extra}End\r\nAttribute VB_Name = \"{name}\"\r\n" + code;
+
+    /// <summary>Geçici proje kurar; (src, out) döner.</summary>
+    private static (string Src, string Out) UnusedProject(string vbp, params (string Name, string Content)[] files)
+    {
+        var root = TestPaths.NewTempDir();
+        var src = Path.Combine(root, "src");
+        Directory.CreateDirectory(src);
+        File.WriteAllText(Path.Combine(src, "mFlags.bas"), UnusedFlags);
+        File.WriteAllText(Path.Combine(src, "Proje.vbp"), vbp);
+        foreach (var (name, content) in files) File.WriteAllText(Path.Combine(src, name), content);
+        return (src, Path.Combine(root, "out"));
+    }
+
+    private static ProcessOptions UnusedOptions(string src, string? outDir, bool remove = true, bool dryRun = false,
+        IReadOnlyCollection<string>? usage = null, IReadOnlyCollection<string>? only = null) => new()
+    {
+        FlagsPath = Path.Combine(src, "mFlags.bas"), SourceDir = src, OutputDir = outDir, DryRun = dryRun, RemoveUnusedForms = remove, UsageSelection = usage, ProcessOnly = only,
+    };
+
+    private const string MainWithDeadRef = "Sub A()\r\n    If F1 Then\r\n        frmEski.Show\r\n    End If\r\nEnd Sub\r\n";
+
+    [Fact]
+    public void Unused_forms_referencing_each_other_are_both_removed()
+    {
+        var (src, _) = UnusedProject("Type=Exe\r\nForm=frmMain.frm\r\nForm=frmA.frm\r\nForm=frmB.frm\r\nStartup=\"frmMain\"\r\n",
+            ("frmMain.frm", FormFile("frmMain", "")),
+            ("frmA.frm", FormFile("frmA", "Sub X()\r\n    frmB.Show\r\nEnd Sub\r\n")),
+            ("frmB.frm", FormFile("frmB", "Sub Y()\r\n    frmA.Show\r\nEnd Sub\r\n")));
+        var report = ProjectProcessor.Run(UnusedOptions(src, null, dryRun: true));
+        Assert.Equal(["frmA.frm", "frmB.frm"], report.RemovedForms.Select(r => r.RelativePath).Order());
+    }
+
+    [Fact]
+    public void Quoted_form_line_is_removed_from_vbp()
+    {
+        var vbp = "Type=Exe\r\nForm=frmMain.frm\r\nForm=\"frmEski.frm\"\r\nStartup=\"frmMain\"\r\n";
+        var (src, outDir) = UnusedProject(vbp, ("frmMain.frm", FormFile("frmMain", "")), ("frmEski.frm", FormFile("frmEski", "")));
+        ProjectProcessor.Run(UnusedOptions(src, outDir));
+        Assert.Equal("Type=Exe\r\nForm=frmMain.frm\r\nStartup=\"frmMain\"\r\n", File.ReadAllText(Path.Combine(outDir, "Proje.vbp")));
+    }
+
+    [Fact]
+    public void Form_opened_from_flags_module_is_kept()
+    {
+        var (src, _) = UnusedProject(UnusedVbp, ("frmMain.frm", FormFile("frmMain", "")), ("frmEski.frm", FormFile("frmEski", "")));
+        File.AppendAllText(Path.Combine(src, "mFlags.bas"), "Sub InitFlags()\r\n    frmEski.Show\r\nEnd Sub\r\n");
+        var report = ProjectProcessor.Run(UnusedOptions(src, null, dryRun: true));
+        Assert.Empty(report.RemovedForms);
+    }
+
+    [Fact]
+    public void Without_vbp_no_form_is_removed()
+    {
+        var (src, _) = UnusedProject(UnusedVbp, ("frmMain.frm", FormFile("frmMain", "")), ("frmEski.frm", FormFile("frmEski", "")));
+        File.Delete(Path.Combine(src, "Proje.vbp"));
+        var report = ProjectProcessor.Run(UnusedOptions(src, null, dryRun: true));
+        Assert.Empty(report.RemovedForms);
+        Assert.Contains(report.FormNotes, n => n.Message.Contains(".vbp bulunamadı"));
+    }
+
+    [Fact]
+    public void Unused_form_referenced_only_in_removed_block_is_removed()
+    {
+        var (src, outDir) = UnusedProject(UnusedVbp,
+            ("frmMain.frm", FormFile("frmMain", MainWithDeadRef)),
+            ("frmEski.frm", FormFile("frmEski", "")));
+        File.WriteAllBytes(Path.Combine(src, "frmEski.frx"), new byte[] { 1, 2, 3 });
+
+        var report = ProjectProcessor.Run(UnusedOptions(src, outDir));
+
+        Assert.Contains(report.RemovedForms, r => r.RelativePath == "frmEski.frm");
+        Assert.True(report.Files.Single(f => f.RelativePath == "frmEski.frm").RemovedFromProject);
+        Assert.False(File.Exists(Path.Combine(outDir, "frmEski.frm")));
+        Assert.False(File.Exists(Path.Combine(outDir, "frmEski.frx")));
+        Assert.True(File.Exists(Path.Combine(outDir, "frmMain.frm")));
+        Assert.Equal(UnusedVbp.Replace("Form=frmEski.frm\r\n", ""), File.ReadAllText(Path.Combine(outDir, "Proje.vbp")));
+        Assert.Contains("KULLANILMAYAN FORMLAR", report.ToText());
+    }
+
+    [Fact]
+    public void Unused_form_removal_is_off_by_default()
+    {
+        var (src, outDir) = UnusedProject(UnusedVbp,
+            ("frmMain.frm", FormFile("frmMain", MainWithDeadRef)),
+            ("frmEski.frm", FormFile("frmEski", "")));
+
+        var report = ProjectProcessor.Run(UnusedOptions(src, outDir, remove: false));
+
+        Assert.Empty(report.RemovedForms);
+        Assert.True(File.Exists(Path.Combine(outDir, "frmEski.frm")));
+        Assert.Equal(UnusedVbp, File.ReadAllText(Path.Combine(outDir, "Proje.vbp")));
+    }
+
+    [Theory]
+    [InlineData("Sub A()\r\n    If T1 Then\r\n        frmEski.Show\r\n    End If\r\nEnd Sub\r\n")]
+    [InlineData("Sub A()\r\n    frmEski.Show\r\nEnd Sub\r\n")]
+    public void Form_referenced_in_live_code_is_kept(string code)
+    {
+        var (src, outDir) = UnusedProject(UnusedVbp,
+            ("frmMain.frm", FormFile("frmMain", code)),
+            ("frmEski.frm", FormFile("frmEski", "")));
+
+        var report = ProjectProcessor.Run(UnusedOptions(src, outDir));
+
+        Assert.Empty(report.RemovedForms);
+        Assert.True(File.Exists(Path.Combine(outDir, "frmEski.frm")));
+    }
+
+    [Fact]
+    public void Startup_form_without_references_is_kept()
+    {
+        var (src, outDir) = UnusedProject("Type=Exe\r\nForm=frmMain.frm\r\nModule=mFlags; mFlags.bas\r\nStartup=\"frmMain\"\r\n",
+            ("frmMain.frm", FormFile("frmMain", "Sub A()\r\nEnd Sub\r\n")));
+
+        var report = ProjectProcessor.Run(UnusedOptions(src, outDir));
+
+        Assert.Empty(report.RemovedForms);
+        Assert.True(File.Exists(Path.Combine(outDir, "frmMain.frm")));
+    }
+
+    [Fact]
+    public void Removal_chains_through_removed_forms()
+    {
+        var vbp = "Type=Exe\r\nForm=frmMain.frm\r\nForm=frmA.frm\r\nForm=frmB.frm\r\nModule=mFlags; mFlags.bas\r\nStartup=\"frmMain\"\r\n";
+        var (src, outDir) = UnusedProject(vbp,
+            ("frmMain.frm", FormFile("frmMain", "Sub X()\r\n    If F1 Then\r\n        frmA.Show\r\n    End If\r\nEnd Sub\r\n")),
+            ("frmA.frm", FormFile("frmA", "Sub Y()\r\n    frmB.Show\r\nEnd Sub\r\n")),
+            ("frmB.frm", FormFile("frmB", "")));
+
+        var report = ProjectProcessor.Run(UnusedOptions(src, outDir));
+
+        Assert.Contains(report.RemovedForms, r => r.RelativePath == "frmA.frm");
+        Assert.Contains(report.RemovedForms, r => r.RelativePath == "frmB.frm");
+        Assert.False(File.Exists(Path.Combine(outDir, "frmA.frm")));
+        Assert.False(File.Exists(Path.Combine(outDir, "frmB.frm")));
+        Assert.Equal(vbp.Replace("Form=frmA.frm\r\n", "").Replace("Form=frmB.frm\r\n", ""), File.ReadAllText(Path.Combine(outDir, "Proje.vbp")));
+    }
+
+    [Fact]
+    public void Form_name_inside_string_literal_is_kept_with_note()
+    {
+        var (src, outDir) = UnusedProject(UnusedVbp,
+            ("frmMain.frm", FormFile("frmMain", "Sub A()\r\n    Dim s As String\r\n    s = \"frmEski\"\r\nEnd Sub\r\n")),
+            ("frmEski.frm", FormFile("frmEski", "")));
+
+        var report = ProjectProcessor.Run(UnusedOptions(src, outDir));
+
+        Assert.Empty(report.RemovedForms);
+        Assert.NotEmpty(report.FormNotes);
+        Assert.True(File.Exists(Path.Combine(outDir, "frmEski.frm")));
+    }
+
+    [Fact]
+    public void Mdi_parent_is_kept_while_child_is_alive()
+    {
+        var vbp = "Type=Exe\r\nForm=frmMain.frm\r\nForm=frmAna.frm\r\nForm=frmCocuk.frm\r\nModule=mFlags; mFlags.bas\r\nStartup=\"frmMain\"\r\n";
+        var (src, outDir) = UnusedProject(vbp,
+            ("frmMain.frm", FormFile("frmMain", "Sub A()\r\n    frmCocuk.Show\r\nEnd Sub\r\n")),
+            ("frmAna.frm", FormFile("frmAna", "", "MDIForm")),
+            ("frmCocuk.frm", FormFile("frmCocuk", "", "Form", "   MDIChild        =   -1  'True\r\n")));
+
+        var report = ProjectProcessor.Run(UnusedOptions(src, outDir));
+
+        Assert.Empty(report.RemovedForms);
+        Assert.True(File.Exists(Path.Combine(outDir, "frmAna.frm")));
+        Assert.True(File.Exists(Path.Combine(outDir, "frmCocuk.frm")));
+    }
+
+    [Fact]
+    public void Mdi_parent_and_unused_child_are_both_removed()
+    {
+        var vbp = "Type=Exe\r\nForm=frmMain.frm\r\nForm=frmAna.frm\r\nForm=frmCocuk.frm\r\nModule=mFlags; mFlags.bas\r\nStartup=\"frmMain\"\r\n";
+        var (src, outDir) = UnusedProject(vbp,
+            ("frmMain.frm", FormFile("frmMain", "Sub A()\r\nEnd Sub\r\n")),
+            ("frmAna.frm", FormFile("frmAna", "", "MDIForm")),
+            ("frmCocuk.frm", FormFile("frmCocuk", "", "Form", "   MDIChild        =   -1  'True\r\n")));
+
+        var report = ProjectProcessor.Run(UnusedOptions(src, outDir));
+
+        Assert.Contains(report.RemovedForms, r => r.RelativePath == "frmAna.frm");
+        Assert.Contains(report.RemovedForms, r => r.RelativePath == "frmCocuk.frm");
+        Assert.False(File.Exists(Path.Combine(outDir, "frmAna.frm")));
+        Assert.False(File.Exists(Path.Combine(outDir, "frmCocuk.frm")));
+    }
+
+    [Fact]
+    public void Dry_run_reports_removed_forms_without_writing()
+    {
+        var (src, outDir) = UnusedProject(UnusedVbp,
+            ("frmMain.frm", FormFile("frmMain", MainWithDeadRef)),
+            ("frmEski.frm", FormFile("frmEski", "")));
+
+        var report = ProjectProcessor.Run(UnusedOptions(src, outDir, dryRun: true));
+
+        Assert.Contains(report.RemovedForms, r => r.RelativePath == "frmEski.frm");
+        Assert.False(Directory.Exists(outDir));
+    }
+
+    [Fact]
+    public void Usage_selection_and_process_only_decide_which_code_is_analysed()
+    {
+        var (src, outDir) = UnusedProject(UnusedVbp,
+            ("frmMain.frm", FormFile("frmMain", MainWithDeadRef)),
+            ("frmEski.frm", FormFile("frmEski", "")));
+
+        // frmMain seçili değil → özgün kod analiz edilir → frmEski kullanılıyor
+        Assert.Empty(ProjectProcessor.Run(UnusedOptions(src, outDir, dryRun: true, usage: new string[0])).RemovedForms);
+
+        // frmMain seçili → bayrak bloğu silinir → frmEski kullanılmıyor
+        Assert.Contains(ProjectProcessor.Run(UnusedOptions(src, outDir, dryRun: true, usage: new[] { "frmMain.frm" })).RemovedForms, r => r.RelativePath == "frmEski.frm");
+
+        // gerçek çalıştırma, ProcessOnly boş → kalır
+        Assert.Empty(ProjectProcessor.Run(UnusedOptions(src, outDir, only: new string[0])).RemovedForms);
+        Assert.True(File.Exists(Path.Combine(outDir, "frmEski.frm")));
+    }
+
     [Fact]
     public void Output_inside_source_is_refused()
         => Assert.Throws<ArgumentException>(() => ProjectProcessor.Run(Options(Path.Combine(TestPaths.SamplesDir, "out"))));

@@ -197,6 +197,7 @@ Tek dosyalık exe ilk açılışta kendini birkaç saniye içinde hazırlar; son
 | **Tanımsız sabit = 0** (`--undefined-unknown` kapatır) | **İşaretli (varsayılan):** `.vbp`'de, Derleme sabitleri alanında veya `#Const` ile hiç tanımlanmamış sabit VB'deki gibi 0 (False) sayılır; ör. `#If ARSLAN = 1` dalı silinir. **Boş:** böyle `#If` grupları olduğu gibi bırakılır ve uyarı verilir. | Kullandığınız sabit listesinin eksik olabileceğinden şüpheleniyorsanız (ör. sabit yalnızca derleme makinesinde tanımlıysa) kaldırın. |
 | **Hiç değer atanmamış Boolean değişken** (iki seçenekli; `--unassigned-unknown` = Bilinmiyor) | Yalnızca bayrak modülünde tanımlanıp hiçbir yordamda değer verilmeyen `gbX As Boolean` değişkenleri için; sabitleri ve değer atanmış değişkenleri etkilemez. **False say (varsayılan):** VB'de Boolean değişken False ile başlar; `If gbX Then` blokları silinir, `Else` kısmı kalır. **Bilinmiyor say:** bu bayraklara bağlı bloklar olduğu gibi kalır. | Değerin aracın göremediği bir yoldan verildiğinden şüpheleniliyorsa (ör. `ByRef` parametreyle başka yordamda değiştiriliyorsa). Diğer dosyalardaki doğrudan `gbX = ...` atamaları zaten yakalanır ve bayrağı her durumda Bilinmiyor yapar. |
 | **Diğer dosyaları (.frx, .vbp...) kopyala** (`--no-copy` kapatır) | Önizlemeye etkisi yoktur; yalnızca **Dönüştür ve çıktıya yaz** sırasında. **İşaretli (varsayılan):** işlenmeyen dosyalar da (`.frx` form resimleri, `.vbp` proje, `.res`, resimler ve **bayrak dosyasının kendisi**) çıktıya aynen kopyalanır; çıktı klasörü VB5'te doğrudan açılabilen eksiksiz bir proje olur. **Boş:** yalnızca işlenen kaynak dosyalar yazılır; `.frx` ve bayrak dosyası olmadan proje açılmaz, dosyaları elle bir proje kopyasının üzerine koymak gerekir. | Neredeyse her zaman işaretli bırakılır. Yalnızca değişen kaynak dosyalarını ayrıca görmek isteniyorsa kapatılır. |
+| **Kullanılmayan formları projeden çıkar** (`--remove-unused-forms`) | Projede hiçbir yerde kullanılmayan formları çıktıdaki `.vbp`'den çıkarır (`Form=` satırı silinir) ve `.frm`/`.frx` dosyalarını çıktıya kopyalamaz. Temizlenmiş kod esas alınır: yalnızca silinen bayrak bloklarından çağrılan formlar da kullanılmamış sayılır; zincir etkisi de çözülür (yalnızca kullanılmayan formdan açılan form da çıkar). Her zaman kalanlar: `.vbp`'deki başlangıç formu, adı string içinde geçen formlar (uyarı notu düşülür) ve bir MDI alt formu kullanılıyorsa MDI ana formu. Seçilmemiş (temizlenmeyen) dosyalar özgün koduyla sayılır. Önizlemede "Projeden çıkarılacak" olarak görünür. | Proje temizlendikten sonra artık açılmayan eski formları da atmak için açın; formlar adla dolaylı (ör. başka projeden) kullanılıyorsa kapalı bırakın. |
 
 Son kullanılan yollar ve seçenekler `%APPDATA%\VbFlagResolver\gui-settings.json` dosyasında saklanır.
 Alanlar komut satırından da doldurulabilir: `VbFlagResolver.Gui.exe --flags x.bas --src klasör [--out klasör] [--preview]`.
@@ -231,6 +232,7 @@ klasörün içinde veya bayrak dosyasının kendisi olamaz. Yollar junction/syml
 | `--ext .frm,.bas` | İşlenecek uzantılar. |
 | `--keep frmEski.frm,Moduller\*.bas` | Bu dosyaları dönüştürmeden olduğu gibi aktar. Göreli yol veya yalnızca dosya adı; `*` ve `?` kullanılabilir; tekrar verilebilir. Bayrak atamaları yine taranır. |
 | `--only frmMain.frm,frmStok.frm` | Yalnızca bu dosyaları temizle, diğerlerini olduğu gibi aktar (`--keep` ile aynı desenler). |
+| `--remove-unused-forms` | Projede hiçbir yerde kullanılmayan formları çıktıdaki `.vbp`'den çıkarır; `.frm`/`.frx` kopyalanmaz. |
 | `--no-copy` | Kaynak olmayan dosyaları kopyalama. |
 | `--codepage 1254` | Kaynak kod sayfası. |
 | `--define A=0,B=1` | `#If` için derleme sabitleri; `.vbp` CondComp değerlerini ezer. |
@@ -293,6 +295,7 @@ Sonuçlar:
 - Başka dosyada atama yapılan (`For X = ...` dahil), aynı isimle yeniden bildirilen veya aynı isimde parametresi
   olan bayraklar (Bilinmiyor sayılır)
 - Dosya başına: silinen / açılan / sadeleşen blok ve tek satırlık If sayısı, satır satır değişiklik listesi
+- Kullanılmayan formlar seçeneği açıksa projeden çıkarılan formlar ve nedeni; adı string içinde geçtiği için bırakılan formlar
 - Uyarılar: silinen kısımdaki fonksiyon çağrıları (VB'de kısa devre yok), silinen etiket/Dim/Const'un başka yerde
   kullanılması, silinen `On Error`, koşul dışında kullanılan bayraklar, çözümlenemeyen koşullar,
   etiket veya `:` içeren (bu yüzden değiştirilmeyen) blok satırları

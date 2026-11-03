@@ -28,6 +28,10 @@ public sealed class ProcessOptions
     public IReadOnlyCollection<string>? ProcessOnly { get; init; }
     /// <summary>Hiçbir yerde tanımlanmamış #If sabitleri VB'deki gibi 0 sayılır; false ise o gruplar olduğu gibi bırakılır.</summary>
     public bool UndefinedConstantsAreZero { get; init; } = true;
+    /// <summary>Projede hiçbir yerde kullanılmayan formları çıktıdaki .vbp'den çıkar; .frm/.frx çıktıya kopyalanmaz.</summary>
+    public bool RemoveUnusedForms { get; init; }
+    /// <summary>Form kullanım analizinde temizlenmiş sayılacak dosyalar (önizlemede arayüz seçimi); null ise ProcessOnly kullanılır.</summary>
+    public IReadOnlyCollection<string>? UsageSelection { get; init; }
 
     /// <summary>Bu dosya dönüştürülmeden olduğu gibi mi aktarılacak?</summary>
     public bool IsKept(string relativePath)
@@ -159,16 +163,84 @@ public static class ProjectProcessor
             if (r.Changed) log?.Invoke($"  {rel}: {r.Report.Changes.Count} değişiklik");
         }
 
+        // 4b) kullanılmayan formlar
+        var removedPaths = new List<string>(); // kaldırılan formların tam kaynak yolları
+        if (o.RemoveUnusedForms)
+        {
+            var usageSel = o.UsageSelection ?? o.ProcessOnly;
+            var analysis = new List<(string Rel, VbSourceFile File)>();
+            foreach (var (rel, file) in sources)
+            {
+                bool cleaned = !ProcessOptions.MatchesKeep(rel, o.KeepAsIs) && (usageSel == null || ProcessOptions.MatchesKeep(rel, usageSel));
+                var outBytes = outputs.First(x => x.Rel == rel).Bytes;
+                analysis.Add((rel, cleaned ? VbSourceFile.FromBytes(file.Path, outBytes, o.CodePage) : file));
+            }
+            // bayrak dosyası dönüştürülmez ama içinden form açılabilir (ör. InitFlags içinde frmX.Show)
+            analysis.Add((Path.GetFileName(flagsPath), VbSourceFile.Load(flagsPath, o.CodePage)));
+            var vbps = others.Where(f => Path.GetExtension(f).Equals(".vbp", StringComparison.OrdinalIgnoreCase))
+                .Select(f => (Path.GetRelativePath(src, f), File.ReadAllBytes(f))).ToList();
+            var (removed, formNotes) = UnusedForms.Find(analysis, vbps, o.CodePage);
+            report.RemovedForms.AddRange(removed);
+            report.FormNotes.AddRange(formNotes);
+            foreach (var r in removed)
+            {
+                var fr = report.Files.FirstOrDefault(x => x.RelativePath == r.RelativePath);
+                if (fr != null) fr.RemovedFromProject = true;
+                removedPaths.Add(Path.GetFullPath(Path.Combine(src, r.RelativePath)));
+                log?.Invoke($"  {r.RelativePath}: projeden çıkarıldı ({r.Reason})");
+            }
+        }
+        var removedRels = new HashSet<string>(report.RemovedForms.Select(r => r.RelativePath), StringComparer.OrdinalIgnoreCase);
+        var removedFrx = new HashSet<string>(removedPaths.Select(p => Path.ChangeExtension(p, ".frx")), StringComparer.OrdinalIgnoreCase);
+
         // 5) yazma
         foreach (var f in others) report.CopiedFiles.Add(Path.GetRelativePath(src, f));
         if (!o.DryRun)
         {
-            foreach (var (rel, bytes) in outputs) Write(guard, outDir!, rel, bytes);
+            foreach (var (rel, bytes) in outputs)
+                if (!removedRels.Contains(rel)) Write(guard, outDir!, rel, bytes);
             // bayrak dosyası kaynak klasördeyse "others" içindedir ve aynen kopyalanır
             if (o.CopyOtherFiles)
-                foreach (var f in others) Write(guard, outDir!, Path.GetRelativePath(src, f), File.ReadAllBytes(f));
+                foreach (var f in others)
+                {
+                    var full = Path.GetFullPath(f);
+                    if (removedFrx.Contains(full)) continue;
+                    var data = File.ReadAllBytes(f);
+                    if (removedPaths.Count > 0 && Path.GetExtension(f).Equals(".vbp", StringComparison.OrdinalIgnoreCase))
+                        data = StripForms(data, Path.GetDirectoryName(full)!, removedPaths, o.CodePage);
+                    Write(guard, outDir!, Path.GetRelativePath(src, f), data);
+                }
         }
         return report;
+    }
+
+    /// <summary>.vbp'den kaldırılan formların Form= satırlarını siler; diğer baytlar aynen kalır.</summary>
+    private static byte[] StripForms(byte[] data, string vbpDir, List<string> removedPaths, int codePage)
+    {
+        var enc = VbSourceFile.GetEncoding(codePage);
+        var result = new List<byte>(data.Length);
+        int start = 0;
+        while (start < data.Length)
+        {
+            int nl = Array.IndexOf(data, (byte)'\n', start);
+            int end = nl < 0 ? data.Length : nl + 1;
+            var text = enc.GetString(data, start, end - start).Trim();
+            bool drop = false;
+            int eq = text.IndexOf('=');
+            if (eq > 0 && text[..eq].Trim().Equals("Form", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    var full = Path.GetFullPath(Path.Combine(vbpDir, text[(eq + 1)..].Trim().Trim('"')));
+                    drop = removedPaths.Any(p => p.Equals(full, StringComparison.OrdinalIgnoreCase));
+                }
+                catch (ArgumentException) { }
+            }
+            if (!drop)
+                for (int i = start; i < end; i++) result.Add(data[i]);
+            start = end;
+        }
+        return result.ToArray();
     }
 
     private static void Write(WriteGuard guard, string outDir, string rel, byte[] bytes)

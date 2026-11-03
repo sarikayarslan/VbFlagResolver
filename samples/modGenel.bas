@@ -23,3 +23,17 @@ Public Sub KdvOraniAyarla(ByVal iOran As Integer)
     End If
     If Not gbFlagHicAtanmamis Then Debug.Print "Atanmamýþ bayrak False sayýldý"
 End Sub
+
+' Formlarý açan yordamlar (kullanýlmayan form analizi bunlara bakar)
+Public Sub AyarlariAc()
+    frmAyarlar.Show vbModal
+End Sub
+
+Public Sub RaporAc()
+    frmRapor.Show
+End Sub
+
+Public Sub SiparisAc()
+    Load frmSiparis
+    frmSiparis.Show
+End Sub

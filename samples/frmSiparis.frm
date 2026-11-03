@@ -261,6 +261,7 @@ Private Sub EskiYazdir(ByVal s As String)
     If FLAG_ESKI_YAZICI Then
         Printer.Print s
         Printer.EndDoc
+        frmEskiRapor.Show vbModal   ' yalnýzca bu (silinecek) blokta açýlýyor
     End If
 End Sub
 

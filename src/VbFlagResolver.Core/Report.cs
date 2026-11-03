@@ -21,6 +21,9 @@ public sealed record ChangeRecord(int Line, ChangeKind Kind, string Description)
 /// <param name="Conditional">Çağrı If/Select/döngü içinde mi?</param>
 public sealed record ProcedureCall(string File, int Line, string Caller, string Procedure, bool Conditional, string Text);
 
+/// <summary>Projede kullanılmadığı için .vbp'den çıkarılan form.</summary>
+public sealed record RemovedForm(string RelativePath, string Name, string Reason);
+
 public sealed class FileReport
 {
     public required string RelativePath { get; init; }
@@ -30,6 +33,8 @@ public sealed class FileReport
     public bool Failed { get; set; }
     /// <summary>Kullanıcı işaretledi: dönüştürülmeden olduğu gibi aktarıldı (atama/gölgeleme taraması yine yapılır).</summary>
     public bool KeptAsIs { get; set; }
+    /// <summary>Kullanılmayan form: çıktıdaki .vbp'den çıkarıldı, dosya çıktıya kopyalanmadı.</summary>
+    public bool RemovedFromProject { get; set; }
     public int RemovedLines { get; set; }
     /// <summary>Önizleme (fark gösterimi) için orijinal ve üretilen içerik.</summary>
     public byte[]? OriginalBytes { get; set; }
@@ -58,6 +63,9 @@ public sealed class Report
     public List<ProcedureCall> ProcedureCalls { get; } = [];
     public List<FileReport> Files { get; } = [];
     public List<string> CopiedFiles { get; } = [];
+    /// <summary>Projeden çıkarılan kullanılmayan formlar.</summary>
+    public List<RemovedForm> RemovedForms { get; } = [];
+    public List<SourceNote> FormNotes { get; } = [];
     public Dictionary<string, int> FlagUsage { get; } = new(StringComparer.OrdinalIgnoreCase);
 
     public int WarningCount => Files.Sum(f => f.Warnings.Count) + FlagAssignments.Count;
@@ -97,7 +105,8 @@ public sealed class Report
         var changed = Files.Where(f => f.Changed).ToList();
         var kept = Files.Where(f => f.KeptAsIs).ToList();
         sb.AppendLine($"İşlenen dosya : {Files.Count}  (değişecek: {changed.Count}, hatalı: {Files.Count(f => f.Failed)}" +
-                      $"{(kept.Count > 0 ? $", olduğu gibi aktarılan: {kept.Count}" : "")})");
+                      $"{(kept.Count > 0 ? $", olduğu gibi aktarılan: {kept.Count}" : "")}" +
+                      $"{(RemovedForms.Count > 0 ? $", projeden çıkarılan form: {RemovedForms.Count}" : "")})");
         if (kept.Count > 0)
             sb.AppendLine($"Olduğu gibi aktarılan (temizlenmedi): {Abbrev(kept.Select(f => f.RelativePath).ToList(), 30)}");
         sb.AppendLine($"Toplam        : {Sum(ChangeKind.BlockRemoved)} blok silindi, {Sum(ChangeKind.BlockLifted)} blok açıldı, " +
@@ -117,6 +126,14 @@ public sealed class Report
                 sb.AppendLine($"    satır {c.Line,5}: {c.Description}");
             foreach (var w in f.Warnings)
                 sb.AppendLine($"  UYARI satır {w.Line,5}: {w.Message}{(w.Text != null ? "  | " + w.Text : "")}");
+            sb.AppendLine();
+        }
+        if (RemovedForms.Count > 0 || FormNotes.Count > 0)
+        {
+            sb.AppendLine($"KULLANILMAYAN FORMLAR (projeden çıkarılan: {RemovedForms.Count})");
+            foreach (var r in RemovedForms)
+                sb.AppendLine($"  {r.RelativePath} ({r.Name}) — {r.Reason}");
+            AppendNotes(sb, "Form notları", FormNotes);
             sb.AppendLine();
         }
         int unchanged = Files.Count(f => !f.Changed && f.Warnings.Count == 0 && !f.Failed && !f.KeptAsIs);
