@@ -60,7 +60,6 @@ public static class UnusedForms
                     try { listed.Add(Path.GetFullPath(Path.Combine(vbpDir, value))); } catch (ArgumentException) { }
             }
         }
-        bool IsCandidate(Info f) => !protectedRels.Contains(f.Rel) && listed.Contains(Path.GetFullPath(Path.Combine(sourceDir, f.Rel)));
 
         // MDI
         bool IsHeader(Info i, Func<string, bool> pred) => i.File.Lines.Take(i.File.HeaderLineCount).Any(l => pred(l.Text.Trim()));
@@ -88,8 +87,11 @@ public static class UnusedForms
         // Canlı bir kaynaktan adıyla (veya string içinde) geçen form canlı olur. Yalnızca birbirini çağıran
         // kullanılmayan formlar (A ↔ B) böylece canlı kalmaz.
         var formSet = forms.ToHashSet();
-        // .vbp'de listelenmeyen veya korunan formlar da çıkarılmaz ve kök sayılır
-        var alive = new HashSet<Info>(infos.Where(i => !formSet.Contains(i) || startup.Contains(NameOf(i)) || !IsCandidate(i)));
+        // hiçbir .vbp'de listelenmeyen formlar projenin parçası değildir: çıkarılır ve içlerindeki kullanımlar sayılmaz
+        var unlisted = forms.Where(f => !protectedRels.Contains(f.Rel) && !Path.IsPathRooted(f.Rel) && !startup.Contains(NameOf(f))
+                                        && !listed.Contains(Path.GetFullPath(Path.Combine(sourceDir, f.Rel)))).ToHashSet();
+        // korunan (olduğu gibi aktarılan, işlenmeyen, Lib) formlar çıkarılmaz ve kök sayılır
+        var alive = new HashSet<Info>(infos.Where(i => !formSet.Contains(i) || startup.Contains(NameOf(i)) || protectedRels.Contains(i.Rel)));
         var noted = new HashSet<Info>();
         var regex = forms.ToDictionary(f => f, f => new Regex($@"\b{Regex.Escape(NameOf(f))}\b", RegexOptions.IgnoreCase));
         bool changed = true;
@@ -98,7 +100,7 @@ public static class UnusedForms
             changed = false;
             foreach (var f in forms)
             {
-                if (alive.Contains(f)) continue;
+                if (alive.Contains(f) || unlisted.Contains(f)) continue;
                 var name = NameOf(f);
                 bool used = alive.Any(s => s != f && s.Idents.ContainsKey(name));
                 if (!used)
@@ -128,7 +130,9 @@ public static class UnusedForms
         {
             var name = NameOf(f);
             bool referenced = infos.Any(s => s != f && s.Idents.ContainsKey(name));
-            removed.Add(new RemovedForm(f.Rel, name, referenced ? "yalnızca kullanılmayan formlardan çağrılıyor" : "kullanılmıyor"));
+            removed.Add(new RemovedForm(f.Rel, name,
+                unlisted.Contains(f) ? "hiçbir .vbp'de listelenmiyor (projede zaten tanımlı değildi)"
+                : referenced ? "yalnızca kullanılmayan formlardan çağrılıyor" : "kullanılmıyor"));
         }
 
         // projede kalan formlar ve nedeni (nerede kullanıldığı); referans (Lib) klasöründeki formlar listelenmez
@@ -143,7 +147,6 @@ public static class UnusedForms
                 .OrderBy(s => formSet.Contains(s)).ThenBy(s => s.Rel, StringComparer.OrdinalIgnoreCase).ToList();
             if (startup.Contains(name)) reason = ".vbp başlangıç formu (Startup)";
             else if (protectedRels.Contains(f.Rel)) reason = "olduğu gibi aktarılıyor veya işlenmiyor; çıkarılmaz";
-            else if (!IsCandidate(f)) reason = "hiçbir .vbp'de listelenmiyor; çıkarılmaz";
             else if (refs.Count > 0)
                 reason = $"kullanıldığı yer: {Where(refs[0], refs[0].Idents[name])}" + (refs.Count > 1 ? $" (+{refs.Count - 1} dosyada daha)" : "");
             else if (alive.FirstOrDefault(s => s != f && s.Strings.Any(x => regex[f].IsMatch(x.Text))) is { } str)

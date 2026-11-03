@@ -347,7 +347,7 @@ public class ProjectProcessorTests
         Assert.Contains("mFlags.bas satır", Reason("frmA"));
         Assert.Contains("+1 dosyada daha", Reason("frmA"));
         Assert.Contains("string içinde", Reason("frmStr"));
-        Assert.Contains("listelenmiyor", Reason("frmLoose"));
+        Assert.Contains(report.RemovedForms, r => r.Name == "frmLoose" && r.Reason.Contains("listelenmiyor"));
     }
 
     [Fact]
@@ -398,7 +398,9 @@ public class ProjectProcessorTests
         {
             FlagsPath = Path.Combine(src, "mFlags.bas"), SourceDir = src, DryRun = true, RemoveUnusedForms = true, KeepAsIs = ["frmKeep.frm"],
         });
-        Assert.Empty(report.RemovedForms); // frmLoose .vbp'de yok, frmKeep olduğu gibi aktarılıyor
+        // frmLoose .vbp'de yok: projede tanımlı değil, çıkarılır; frmKeep olduğu gibi aktarılıyor, kalır
+        Assert.Equal(["frmLoose.frm"], report.RemovedForms.Select(r => r.RelativePath));
+        Assert.Contains("listelenmiyor", report.RemovedForms[0].Reason);
     }
 
     [Fact]
