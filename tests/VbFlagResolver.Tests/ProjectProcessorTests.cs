@@ -295,6 +295,66 @@ public class ProjectProcessorTests
 
     private const string MainWithDeadRef = "Sub A()\r\n    If F1 Then\r\n        frmEski.Show\r\n    End If\r\nEnd Sub\r\n";
 
+    /// <summary>Kaynak klasörün dışında (kardeş) bir Lib klasörü kurar.</summary>
+    private static string LibDir(string src, params (string Name, string Content)[] files)
+    {
+        var lib = Path.Combine(Path.GetDirectoryName(src)!, "Lib");
+        Directory.CreateDirectory(Path.Combine(lib, "Alt"));
+        foreach (var (name, content) in files) File.WriteAllText(Path.Combine(lib, name), content);
+        return lib;
+    }
+
+    [Fact]
+    public void Form_used_only_from_reference_lib_is_kept_and_lib_is_untouched()
+    {
+        var (src, outDir) = UnusedProject(UnusedVbp, ("frmMain.frm", FormFile("frmMain", "")), ("frmEski.frm", FormFile("frmEski", "")));
+        var lib = LibDir(src,
+            ("modOrtak.bas", "Attribute VB_Name = \"modOrtak\"\r\nSub Ac()\r\n    If F1 Then frmEski.Show\r\nEnd Sub\r\n"),
+            (Path.Combine("Alt", "notlar.bas"), "Attribute VB_Name = \"notlar\"\r\n' frmMain yalnızca yorumda\r\n"));
+        var before = Directory.GetFiles(lib, "*", SearchOption.AllDirectories).ToDictionary(f => f, File.ReadAllBytes);
+
+        var o = UnusedOptions(src, outDir);
+        var report = ProjectProcessor.Run(new ProcessOptions
+        {
+            FlagsPath = o.FlagsPath, SourceDir = src, OutputDir = outDir, RemoveUnusedForms = true, ReferenceDirs = [lib],
+        });
+
+        // Lib dönüştürülmez: içindeki "If F1 Then frmEski.Show" olduğu gibi sayılır, form kalır
+        Assert.Empty(report.RemovedForms);
+        Assert.True(File.Exists(Path.Combine(outDir, "frmEski.frm")));
+        Assert.Equal(2, report.ReferenceFileCount);
+        Assert.Contains("salt okunur", report.ToText());
+        // Lib dosyaları değişmedi ve çıktıya kopyalanmadı
+        foreach (var (f, bytes) in before) Assert.Equal(bytes, File.ReadAllBytes(f));
+        Assert.False(File.Exists(Path.Combine(outDir, "modOrtak.bas")));
+    }
+
+    [Fact]
+    public void Without_reference_lib_the_same_form_is_removed()
+    {
+        var (src, _) = UnusedProject(UnusedVbp, ("frmMain.frm", FormFile("frmMain", "")), ("frmEski.frm", FormFile("frmEski", "")));
+        LibDir(src, ("modOrtak.bas", "Attribute VB_Name = \"modOrtak\"\r\nSub Ac()\r\n    frmEski.Show\r\nEnd Sub\r\n"));
+        var report = ProjectProcessor.Run(UnusedOptions(src, null, dryRun: true)); // Lib verilmedi
+        Assert.Equal(["frmEski.frm"], report.RemovedForms.Select(r => r.RelativePath));
+    }
+
+    [Fact]
+    public void Reference_lib_must_exist_and_output_cannot_be_inside_it()
+    {
+        var (src, _) = UnusedProject(UnusedVbp, ("frmMain.frm", FormFile("frmMain", "")));
+        var lib = LibDir(src);
+        Assert.Throws<DirectoryNotFoundException>(() => ProjectProcessor.Run(new ProcessOptions
+        {
+            FlagsPath = Path.Combine(src, "mFlags.bas"), SourceDir = src, DryRun = true, ReferenceDirs = [lib + "_yok"],
+        }));
+        Assert.Throws<ArgumentException>(() => ProjectProcessor.Run(new ProcessOptions
+        {
+            FlagsPath = Path.Combine(src, "mFlags.bas"), SourceDir = src, OutputDir = Path.Combine(lib, "cikti"), ReferenceDirs = [lib],
+        }));
+        Assert.Throws<InvalidOperationException>(() =>
+            new WriteGuard(src, Path.Combine(src, "mFlags.bas"), [lib]).CheckFile(Path.Combine(lib, "rapor.txt")));
+    }
+
     [Fact]
     public void Form_used_from_file_outside_ext_filter_is_kept()
     {

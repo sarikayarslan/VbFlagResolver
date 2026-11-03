@@ -16,6 +16,8 @@ internal sealed class MainForm : Form
     private readonly TextBox _txtFlags = new() { Dock = DockStyle.Fill };
     private readonly TextBox _txtSrc = new() { Dock = DockStyle.Fill };
     private readonly TextBox _txtOut = new() { Dock = DockStyle.Fill };
+    /// <summary>İsteğe bağlı salt okunur referans klasörleri (ör. Lib), ';' ile ayrılmış.</summary>
+    private readonly TextBox _txtRefDirs = new() { Dock = DockStyle.Fill, PlaceholderText = "İsteğe bağlı: ortak Lib gibi, kaynak dışındaki klasörler (; ile ayırın). Yalnızca form adları aranır, dosyalara dokunulmaz." };
     private readonly ComboBox _cmbMode = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 170 };
     private readonly TextBox _txtInit = new() { Width = 200, PlaceholderText = "tüm yordamlar (sıra bilinmiyor)" };
     private readonly TextBox _txtExt = new() { Width = 220 };
@@ -118,6 +120,10 @@ internal sealed class MainForm : Form
             "İşaretli: #If / #ElseIf / #Else / #End If grupları derleme sabitlerine göre çözülür; VB'nin derleyeceği dal kalır,\n" +
             "diğer dallar ve #If satırları silinir. Değeri bilinmeyen sabit içeren grup olduğu gibi bırakılır ve raporlanır.\n" +
             "Boş: #If'lere dokunulmaz; bayrak dosyasında #If içindeki tanım/atamalar Bilinmiyor sayılır.");
+        _toolTip.SetToolTip(_txtRefDirs,
+            "İsteğe bağlı. Projenin kullandığı ama kaynak klasör dışındaki kod klasörleri (ör. ortak Lib); birden çok ise ; ile ayırın.\n" +
+            "'Kullanılmayan formları projeden çıkar' açıkken form adları bu klasörlerdeki .bas/.frm/.cls/... dosyalarında da aranır;\n" +
+            "adı geçen form projeden çıkarılmaz. Bu dosyalar yalnızca okunur: asla değiştirilmez, kopyalanmaz, çıktı buraya yazılamaz.");
         _toolTip.SetToolTip(_chkRemoveUnusedForms,
             "İşaretli: projede hiçbir yerde kullanılmayan formlar (yalnızca temizlenen bayrak bloklarından çağrılanlar dahil) çıktıdaki .vbp'den çıkarılır, .frm/.frx çıktıya kopyalanmaz.\n" +
             "Başlangıç formu, adı string içinde geçen formlar ve kullanılan MDI alt formlarının ana formu korunur.\n" +
@@ -167,6 +173,7 @@ internal sealed class MainForm : Form
         AddPathRow(paths, 0, "Bayrak dosyası:", _txtFlags, BrowseFlags);
         AddPathRow(paths, 1, "Kaynak klasör:", _txtSrc, () => BrowseFolder(_txtSrc, "VB5 proje klasörünü seçin"));
         AddPathRow(paths, 2, "Çıktı klasörü:", _txtOut, () => BrowseFolder(_txtOut, "Çıktının yazılacağı klasörü seçin (kaynak klasör olamaz)"));
+        AddPathRow(paths, 3, "Referans klasörleri:", _txtRefDirs, BrowseRefDir);
         var grpPaths = new GroupBox { Text = "Girdiler", Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(8, 4, 8, 6) };
         grpPaths.Controls.Add(paths);
         root.Controls.Add(grpPaths, 0, 0);
@@ -392,6 +399,7 @@ internal sealed class MainForm : Form
         };
         _chkUndefinedZero.CheckedChanged += (_, _) => ScheduleFlagRead();
         _chkRemoveUnusedForms.CheckedChanged += (_, _) => _reportIsCurrent = false;
+        _txtRefDirs.TextChanged += (_, _) => _reportIsCurrent = false;
         _txtSrc.TextChanged += (_, _) => { if (File.Exists(_txtFlags.Text.Trim())) ScheduleFlagRead(); }; // .vbp sabitleri kaynaktan gelir
         _flagReadTimer.Tick += (_, _) =>
         {
@@ -431,6 +439,19 @@ internal sealed class MainForm : Form
         else if (Directory.Exists(_txtSrc.Text)) dlg.InitialDirectory = _txtSrc.Text;
         if (dlg.ShowDialog(this) == DialogResult.OK) _txtFlags.Text = dlg.FileName;
     }
+
+    /// <summary>Seçilen klasörü referans listesine ekler (zaten varsa eklemez).</summary>
+    private void BrowseRefDir()
+    {
+        using var dlg = new FolderBrowserDialog { Description = "Referans klasörü seçin (ör. ortak Lib; salt okunur)", UseDescriptionForTitle = true };
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        var list = RefDirs();
+        if (!list.Contains(dlg.SelectedPath, StringComparer.OrdinalIgnoreCase)) list.Add(dlg.SelectedPath);
+        _txtRefDirs.Text = string.Join("; ", list);
+    }
+
+    private List<string> RefDirs()
+        => _txtRefDirs.Text.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
 
     private void BrowseFolder(TextBox box, string description)
     {
@@ -485,6 +506,7 @@ internal sealed class MainForm : Form
             // önizleme tüm dosyaları gösterir (neyin değişeceğine bakıp seçmek için); yazarken yalnızca seçililer temizlenir
             ProcessOnly = dryRun ? null : SelectedFiles(),
             RemoveUnusedForms = _chkRemoveUnusedForms.Checked,
+            ReferenceDirs = RefDirs(),
             UsageSelection = dryRun ? SelectedFiles() : null,
             FlagOptions = new FlagReaderOptions
             {
@@ -558,6 +580,7 @@ internal sealed class MainForm : Form
         SetUnassignedUnknown(defaults.UnassignedUnknown);
         _chkCopy.Checked = defaults.CopyOtherFiles;
         _chkRemoveUnusedForms.Checked = defaults.RemoveUnusedForms;
+        _txtRefDirs.Text = defaults.ReferenceDirs;
         _txtDefines.Text = defaults.Defines;
         _chkDirectives.Checked = defaults.ResolveDirectives;
         _chkUndefinedZero.Checked = defaults.UndefinedConstantsAreZero;
@@ -1047,7 +1070,7 @@ internal sealed class MainForm : Form
             FileName = $"VbFlagResolver-rapor-{DateTime.Now:yyyyMMdd-HHmm}.txt",
         };
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
-        try { new WriteGuard(_report.SourceDir, _report.FlagsFile).CheckFile(dlg.FileName); }
+        try { new WriteGuard(_report.SourceDir, _report.FlagsFile, _report.ReferenceDirs).CheckFile(dlg.FileName); }
         catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException)
         {
             MessageBox.Show(this, ex.Message + "\n\nRaporu kaynak klasörün dışına kaydedin.", "Raporu kaydet", MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -1076,6 +1099,7 @@ internal sealed class MainForm : Form
         SetUnassignedUnknown(_settings.UnassignedUnknown);
         _chkCopy.Checked = _settings.CopyOtherFiles;
         _chkRemoveUnusedForms.Checked = _settings.RemoveUnusedForms;
+        _txtRefDirs.Text = _settings.ReferenceDirs;
         _txtDefines.Text = _settings.Defines;
         _chkDirectives.Checked = _settings.ResolveDirectives;
         _chkUndefinedZero.Checked = _settings.UndefinedConstantsAreZero;
@@ -1100,6 +1124,7 @@ internal sealed class MainForm : Form
         _settings.UnassignedUnknown = _rbUnassignedUnknown.Checked;
         _settings.CopyOtherFiles = _chkCopy.Checked;
         _settings.RemoveUnusedForms = _chkRemoveUnusedForms.Checked;
+        _settings.ReferenceDirs = _txtRefDirs.Text.Trim();
         _settings.Defines = _txtDefines.Text.Trim();
         _settings.ResolveDirectives = _chkDirectives.Checked;
         _settings.UndefinedConstantsAreZero = _chkUndefinedZero.Checked;

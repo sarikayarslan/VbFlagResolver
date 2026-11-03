@@ -33,6 +33,8 @@ internal static class Program
                                  * ve ? kullanılabilir (ör. frmEski.frm,Moduller\*.bas). Tekrar verilebilir.
           --only <dosyalar>      Yalnızca bu dosyaları temizle, diğerlerini olduğu gibi aktar (--keep ile aynı desenler).
           --remove-unused-forms  Projede hiçbir yerde kullanılmayan formları çıktıdaki .vbp'den çıkar (.frm/.frx kopyalanmaz).
+          --lib <klasör>         İsteğe bağlı referans klasörü (ör. ortak Lib); form adları burada da aranır. Salt okunur:
+                                 dosyalarına asla dokunulmaz. Tekrar verilebilir.
           --no-copy              Kaynak olmayan dosyaları (.frx, .vbp, ...) çıktıya kopyalama.
           --codepage <n>         Kaynak kod sayfası. Varsayılan: 1254
           -h, --help             Bu yardımı göster.
@@ -50,6 +52,7 @@ internal static class Program
         string[]? initProcs = null;
         string[]? exts = null;
         var keep = new List<string>();
+        var libs = new List<string>();
         List<string>? only = null;
         int codePage = 1254;
 
@@ -67,6 +70,7 @@ internal static class Program
                     case "--report": reportPath = Next(); break;
                     case "--dry-run": dryRun = true; break;
                     case "--remove-unused-forms": removeUnusedForms = true; break;
+                    case "--lib": libs.Add(Next()); break;
                     case "--no-copy": noCopy = true; break;
                     case "--unassigned-unknown": unassignedUnknown = true; break;
                     case "--define": defines = defines == null ? Next() : defines + "," + Next(); break;
@@ -130,10 +134,11 @@ internal static class Program
                 KeepAsIs = keep,
                 ProcessOnly = only,
                 RemoveUnusedForms = removeUnusedForms,
+                ReferenceDirs = libs,
                 UndefinedConstantsAreZero = !undefinedUnknown,
             };
             // rapor da orijinal dosyaların üzerine yazılamaz; dönüşümden önce kontrol et
-            if (reportPath != null) new WriteGuard(Path.GetFullPath(src), Path.GetFullPath(flags)).CheckFile(reportPath);
+            if (reportPath != null) new WriteGuard(Path.GetFullPath(src), Path.GetFullPath(flags), libs).CheckFile(reportPath);
             var report = ProjectProcessor.Run(options, Console.WriteLine);
             var text = report.ToText();
             Console.WriteLine();

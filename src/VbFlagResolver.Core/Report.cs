@@ -48,6 +48,10 @@ public sealed class Report
 {
     public string FlagsFile { get; set; } = "";
     public string SourceDir { get; set; } = "";
+    /// <summary>Salt okunur referans klasörleri (kullanılmayan form analizinde form adları burada da aranır).</summary>
+    public List<string> ReferenceDirs { get; } = [];
+    /// <summary>Kullanılmayan form analizinde taranan referans kod dosyası sayısı.</summary>
+    public int ReferenceFileCount { get; set; }
     public string? OutputDir { get; set; }
     public bool DryRun { get; set; }
     public FlagTable Flags { get; set; } = new();
@@ -78,6 +82,10 @@ public sealed class Report
         sb.AppendLine($"Tarih         : {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
         sb.AppendLine($"Bayrak dosyası: {FlagsFile}");
         sb.AppendLine($"Kaynak klasör : {SourceDir}");
+        foreach (var d in ReferenceDirs)
+            sb.AppendLine($"Referans      : {d} (salt okunur; yalnızca form adları aranır)");
+        if (ReferenceFileCount > 0)
+            sb.AppendLine($"Referans dosya: {ReferenceFileCount} kod dosyası tarandı (değiştirilmez, kopyalanmaz)");
         sb.AppendLine($"Çıktı klasörü : {(DryRun ? "(kuru çalıştırma - dosya yazılmadı)" : OutputDir)}");
         sb.AppendLine();
 

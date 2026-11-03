@@ -8,11 +8,16 @@ public sealed class WriteGuard
 {
     private readonly string _src;
     private readonly string _flags;
+    private readonly List<string> _readOnly;
 
-    public WriteGuard(string sourceDir, string flagsPath)
+    public WriteGuard(string sourceDir, string flagsPath) : this(sourceDir, flagsPath, null) { }
+
+    /// <param name="readOnlyDirs">Asla yazılmayacak ek klasörler (referans/Lib klasörleri).</param>
+    public WriteGuard(string sourceDir, string flagsPath, IEnumerable<string>? readOnlyDirs)
     {
         _src = RealPath(sourceDir);
         _flags = RealPath(flagsPath);
+        _readOnly = (readOnlyDirs ?? []).Select(d => RealPath(d)).ToList();
     }
 
     /// <summary>Çıktı klasörü kaynak klasörle iç içe olamaz (aynısı, içi veya üstü).</summary>
@@ -24,6 +29,8 @@ public sealed class WriteGuard
                                         + (Same(real, outDir) ? "" : $" (bağlantı çözüldü: {real})"));
         if (ProjectProcessor.IsUnder(_flags, real))
             throw new ArgumentException("Çıktı klasörü bayrak dosyasını içeremez; bayrak dosyasının üzerine yazılabilir.");
+        if (_readOnly.Any(d => ProjectProcessor.IsUnder(real, d) || ProjectProcessor.IsUnder(d, real)))
+            throw new ArgumentException("Çıktı klasörü referans klasörüyle aynı, onun içinde veya üst klasörü olamaz; referans dosyalarına yazılmaz.");
     }
 
     /// <summary>Yazılacak dosya (çıktı veya rapor) kaynak klasörde veya bayrak dosyasının kendisi olamaz.</summary>
@@ -34,6 +41,8 @@ public sealed class WriteGuard
             throw new InvalidOperationException($"Güvenlik: kaynak klasöre yazma engellendi: {real}");
         if (Same(real, _flags))
             throw new InvalidOperationException($"Güvenlik: bayrak dosyasının üzerine yazma engellendi: {real}");
+        if (_readOnly.Any(d => ProjectProcessor.IsUnder(real, d)))
+            throw new InvalidOperationException($"Güvenlik: referans klasörüne yazma engellendi: {real}");
     }
 
     private static bool Same(string a, string b)

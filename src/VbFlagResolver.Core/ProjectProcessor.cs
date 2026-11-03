@@ -32,6 +32,11 @@ public sealed class ProcessOptions
     public bool RemoveUnusedForms { get; init; }
     /// <summary>Form kullanım analizinde temizlenmiş sayılacak dosyalar (önizlemede arayüz seçimi); null ise ProcessOnly kullanılır.</summary>
     public IReadOnlyCollection<string>? UsageSelection { get; init; }
+    /// <summary>
+    /// İsteğe bağlı salt okunur referans klasörleri (ör. kaynak klasör dışındaki ortak Lib). Kullanılmayan form analizinde
+    /// bu klasörlerdeki kod dosyalarında form adları aranır; dosyalar asla değiştirilmez veya kopyalanmaz.
+    /// </summary>
+    public IReadOnlyCollection<string> ReferenceDirs { get; init; } = [];
 
     /// <summary>Bu dosya dönüştürülmeden olduğu gibi mi aktarılacak?</summary>
     public bool IsKept(string relativePath)
@@ -70,8 +75,14 @@ public static class ProjectProcessor
         if (!Directory.Exists(src)) throw new DirectoryNotFoundException($"Kaynak klasör bulunamadı: {src}");
         if (!File.Exists(flagsPath)) throw new FileNotFoundException($"Bayrak dosyası bulunamadı: {flagsPath}");
 
+        var refDirs = o.ReferenceDirs.Where(d => !string.IsNullOrWhiteSpace(d)).Select(d => Path.GetFullPath(d.Trim()))
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        // yazım hatası sessizce atlanırsa oradaki form kullanımları görülmez ve formlar yanlışlıkla çıkarılır
+        foreach (var d in refDirs)
+            if (!Directory.Exists(d)) throw new DirectoryNotFoundException($"Referans klasör bulunamadı: {d}");
+
         string? outDir = o.OutputDir == null ? null : Path.GetFullPath(o.OutputDir);
-        var guard = new WriteGuard(src, flagsPath);
+        var guard = new WriteGuard(src, flagsPath, refDirs);
         if (!o.DryRun)
         {
             if (outDir == null) throw new ArgumentException("--out gerekli (veya --dry-run kullanın)");
@@ -79,6 +90,7 @@ public static class ProjectProcessor
         }
 
         var report = new Report { FlagsFile = flagsPath, SourceDir = src, OutputDir = outDir, DryRun = o.DryRun };
+        report.ReferenceDirs.AddRange(refDirs);
 
         // 0) koşullu derleme sabitleri: .vbp CondComp + kullanıcı
         var constNotes = new List<SourceNote>();
@@ -194,6 +206,18 @@ public static class ProjectProcessor
                 protectedRels.Add(rel);
             }
             if (!IsUnder(flagsPath, src)) analysis.Add((Path.GetFileName(flagsPath), VbSourceFile.Load(flagsPath, o.CodePage)));
+            // referans klasörleri (ör. Lib): yalnızca okunur; içlerinde adı geçen formlar çıkarılmaz
+            var refSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var d in refDirs)
+            foreach (var f in Directory.EnumerateFiles(d, "*", SearchOption.AllDirectories))
+            {
+                var full = Path.GetFullPath(f);
+                if (!codeExts.Contains(Path.GetExtension(full), StringComparer.OrdinalIgnoreCase) || IsUnder(full, src)
+                    || SamePath(full, flagsPath) || !refSeen.Add(full)) continue;
+                analysis.Add((full, VbSourceFile.Load(full, o.CodePage)));
+                protectedRels.Add(full);
+            }
+            report.ReferenceFileCount = refSeen.Count;
             var vbps = others.Where(f => Path.GetExtension(f).Equals(".vbp", StringComparison.OrdinalIgnoreCase))
                 .Select(f => (Path.GetRelativePath(src, f), File.ReadAllBytes(f))).ToList();
             var (removed, formNotes) = UnusedForms.Find(analysis, vbps, o.CodePage, src, protectedRels);
