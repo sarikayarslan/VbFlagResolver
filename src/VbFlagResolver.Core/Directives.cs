@@ -68,29 +68,47 @@ public sealed class CondConstants
         if (sourceDir != null && Directory.Exists(sourceDir))
         {
             var enc = VbSourceFile.GetEncoding(codePage);
-            foreach (var vbp in Directory.EnumerateFiles(sourceDir, "*.vbp", SearchOption.AllDirectories).OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
+            var all = Directory.EnumerateFiles(sourceDir, "*.vbp", SearchOption.AllDirectories).OrderBy(f => f, StringComparer.OrdinalIgnoreCase).ToList();
+            var top = all.Where(f => SameDir(Path.GetDirectoryName(f)!, sourceDir)).ToList();
+            // VB her projeyi kendi .vbp'siyle derler. Üst seviyede tek .vbp varsa proje odur; alt klasörlerdekiler (yedek,
+            // demo...) sabitleri karıştırmasın
+            var vbps = top.Count == 1 ? top : all;
+            if (top.Count == 1 && all.Count > 1)
+                notes.Add(new SourceNote(Path.GetFileName(top[0]), 0,
+                    $"Derleme sabitleri yalnızca {Path.GetFileName(top[0])} dosyasından alındı; alt klasörlerdeki .vbp dosyaları yok sayıldı: " +
+                    string.Join(", ", all.Except(top).Select(f => Path.GetRelativePath(sourceDir, f)))));
+
+            var perVbp = new List<(string Rel, Dictionary<string, DValue?> Values)>();
+            foreach (var vbp in vbps)
             {
-                string rel = Path.GetRelativePath(sourceDir, vbp);
+                var values = new Dictionary<string, DValue?>(StringComparer.OrdinalIgnoreCase);
                 foreach (var raw in File.ReadAllLines(vbp, enc))
                 {
                     var line = raw.Trim();
                     if (!line.StartsWith("CondComp", StringComparison.OrdinalIgnoreCase)) continue;
                     int eq = line.IndexOf('=');
                     if (eq < 0) continue;
-                    var spec = line[(eq + 1)..].Trim().Trim('"');
-                    foreach (var (name, value) in ParseList(spec))
-                    {
-                        if (c._values.TryGetValue(name, out var old) && !Equals(old.Value, value))
-                        {
-                            c.Set(name, null, $"{old.Source}, {rel} (farklı değerler)");
-                            notes.Add(new SourceNote(rel, 0, $"Derleme sabiti {name} .vbp dosyalarında farklı değerlerle tanımlı; bilinmiyor sayıldı"));
-                        }
-                        else
-                        {
-                            c.Set(name, value, $"{rel} CondComp");
-                        }
-                    }
+                    foreach (var (name, value) in ParseList(line[(eq + 1)..].Trim().Trim('"')))
+                        values[name] = value;
                 }
+                perVbp.Add((Path.GetRelativePath(sourceDir, vbp), values));
+            }
+
+            // birden çok .vbp: bir projede tanımlı olmayan sabit o projede 0'dır; değerler farklıysa hangisinin geçerli
+            // olduğu bilinemez (sabit yalnızca bir projede tanımlıysa da)
+            foreach (var name in perVbp.SelectMany(p => p.Values.Keys).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(n => n, StringComparer.OrdinalIgnoreCase))
+            {
+                var each = perVbp.Select(p => (p.Rel, Value: p.Values.TryGetValue(name, out var v) ? v : DValue.Num(0), Defined: p.Values.ContainsKey(name))).ToList();
+                if (each.All(e => Equals(e.Value, each[0].Value)))
+                {
+                    c.Set(name, each[0].Value, string.Join(", ", each.Where(e => e.Defined).Select(e => e.Rel)) + " CondComp");
+                    continue;
+                }
+                string detail = string.Join("; ", each.Select(e => $"{e.Rel}: {(e.Defined ? e.Value?.ToString() ?? "bilinmiyor" : "tanımsız (0)")}"));
+                c.Set(name, null, $"farklı .vbp değerleri ({detail})");
+                notes.Add(new SourceNote(each.First(e => e.Defined).Rel, 0,
+                    $"Derleme sabiti {name} .vbp dosyalarında farklı ({detail}); bilinmiyor sayıldı. " +
+                    "Temizlenecek projenin değerini 'Derleme sabitleri' alanına (--define) yazın"));
             }
         }
         if (!string.IsNullOrWhiteSpace(overrides))
@@ -105,6 +123,9 @@ public sealed class CondConstants
         }
         return c;
     }
+
+    private static bool SameDir(string a, string b)
+        => string.Equals(Path.GetFullPath(a).TrimEnd('\\', '/'), Path.GetFullPath(b).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase);
 
     /// <summary>"AD=değer" biçiminde olmayan parçalar (kullanıcı girdisini doğrulamak için).</summary>
     public static List<string> InvalidEntries(string spec)

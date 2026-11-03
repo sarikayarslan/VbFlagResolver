@@ -275,6 +275,12 @@ gelir. Yordamlar metindeki sırayla değil, **çağrı sırasıyla** çalışmı
 2. arayüzde "Derleme sabitleri" alanı / `--define`,
 3. dosyanın içindeki `#Const` satırları — VB'deki gibi yalnızca o dosyada ve tanımlandığı yerden sonra geçerli.
 
+Kaynak klasörde birden çok `.vbp` varsa: üst seviyede tek `.vbp` bulunuyorsa proje odur, alt klasörlerdeki (yedek, demo...)
+`.vbp` dosyaları yok sayılır (raporda belirtilir). Üst seviyede birden çok `.vbp` varsa, bir projede tanımlı olmayan sabit o
+projede 0 sayılır; `.vbp` dosyaları arasında değeri farklı olan sabit (ör. yalnızca `ProjeDemo.vbp`'de `DEM = 1`) bilinmiyor
+sayılır, o `#If` grubu olduğu gibi kalır ve raporda hangi `.vbp`'de hangi değerin olduğu yazar. Temizlenecek projenin değerini
+"Derleme sabitleri" alanına yazarak çözebilirsiniz.
+
 Sonuçlar:
 
 - Koşulu bilinen grup: derlenecek dalın içeriği kalır (girintisi değişmez), diğer dallar ve `#If` satırları silinir.

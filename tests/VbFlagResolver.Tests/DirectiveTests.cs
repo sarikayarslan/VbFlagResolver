@@ -112,6 +112,41 @@ public class DirectiveTests
     }
 
     [Fact]
+    public void Constant_defined_in_only_one_of_several_vbp_files_is_unknown()
+    {
+        // ana proje DEM'i tanımlamıyor (VB'de 0), demo projesi DEM = 1: hangisi temizleniyor bilinemez
+        var dir = TestPaths.NewTempDir();
+        File.WriteAllText(Path.Combine(dir, "Proje.vbp"), "Type=Exe\r\nStartup=\"Sub Main\"\r\n");
+        File.WriteAllText(Path.Combine(dir, "ProjeDemo.vbp"), "Type=Exe\r\nCondComp=\"DEM = 1 : ORTAK = 1\"\r\n");
+        File.WriteAllText(Path.Combine(dir, "Proje2.vbp"), "Type=Exe\r\nCondComp=\"ORTAK = 1\"\r\n");
+        var notes = new List<SourceNote>();
+        var c = CondConstants.FromProject(dir, null, notes);
+        Assert.True(c.TryGet("DEM", out var dem));
+        Assert.Null(dem);
+        Assert.True(c.TryGet("ORTAK", out var ortak)); // Proje.vbp'de tanımsız (0), diğerlerinde 1
+        Assert.Null(ortak);
+        Assert.Contains(notes, n => n.Message.Contains("DEM") && n.Message.Contains("Proje.vbp: tanımsız (0)"));
+
+        // kullanıcı değeri verince çözülür
+        var o = CondConstants.FromProject(dir, "DEM=0, ORTAK=1", new List<SourceNote>());
+        Assert.True(o.TryGet("DEM", out var d0) && d0!.Value.Number == 0);
+    }
+
+    [Fact]
+    public void Single_top_level_vbp_wins_over_vbp_files_in_subfolders()
+    {
+        var dir = TestPaths.NewTempDir();
+        Directory.CreateDirectory(Path.Combine(dir, "Yedek"));
+        File.WriteAllText(Path.Combine(dir, "Proje.vbp"), "Type=Exe\r\nCondComp=\"DEBUG_MODE = 0\"\r\n");
+        File.WriteAllText(Path.Combine(dir, "Yedek", "Eski.vbp"), "Type=Exe\r\nCondComp=\"DEM = 1 : DEBUG_MODE = 1\"\r\n");
+        var notes = new List<SourceNote>();
+        var c = CondConstants.FromProject(dir, null, notes);
+        Assert.False(c.TryGet("DEM", out _));                                  // yedekteki tanım alınmadı
+        Assert.True(c.TryGet("DEBUG_MODE", out var d) && d!.Value.Number == 0);
+        Assert.Contains(notes, n => n.Message.Contains("yok sayıldı") && n.Message.Contains("Eski.vbp"));
+    }
+
+    [Fact]
     public void Module_const_overrides_project_value_inside_that_file()
     {
         var file = VbSourceFile.FromText("m.bas", "#Const DEBUG_MODE = 0\r\n#If DEBUG_MODE Then\r\na = 1\r\n#Else\r\na = 2\r\n#End If\r\n");
