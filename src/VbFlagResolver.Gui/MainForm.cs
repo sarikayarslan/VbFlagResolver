@@ -21,6 +21,8 @@ internal sealed class MainForm : Form
     private readonly ComboBox _cmbMode = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 170 };
     private readonly TextBox _txtInit = new() { Width = 200, PlaceholderText = "tüm yordamlar (sıra bilinmiyor)" };
     private readonly TextBox _txtExt = new() { Width = 220 };
+    private readonly TextBox _txtSkipFlags = new() { Width = 300, PlaceholderText = "İsteğe bağlı, virgülle: ör. FLAG_A, gbFlagX" };
+    private readonly TextBox _txtSkipDefines = new() { Width = 300, PlaceholderText = "İsteğe bağlı, virgülle: ör. DEM, THE" };
     private readonly NumericUpDown _numCodePage = new() { Minimum = 37, Maximum = 65001, Width = 70 };
     // hiç değer atanmamış Boolean değişken bayrak: False mı, Bilinmiyor mu?
     private readonly RadioButton _rbUnassignedFalse = new() { Text = "False say (VB'nin başlangıç değeri) — bağlı bloklar sadeleşir", AutoSize = true, Checked = true };
@@ -120,6 +122,12 @@ internal sealed class MainForm : Form
             "İşaretli: #If / #ElseIf / #Else / #End If grupları derleme sabitlerine göre çözülür; VB'nin derleyeceği dal kalır,\n" +
             "diğer dallar ve #If satırları silinir. Değeri bilinmeyen sabit içeren grup olduğu gibi bırakılır ve raporlanır.\n" +
             "Boş: #If'lere dokunulmaz; bayrak dosyasında #If içindeki tanım/atamalar Bilinmiyor sayılır.");
+        _toolTip.SetToolTip(_txtSkipFlags,
+            "Koşulunda bu bayraklardan biri geçen If blokları (tek satırlık If dahil) olduğu gibi kalır: koşul sadeleştirilmez, dal silinmez.\n" +
+            "Diğer bayraklarla birlikte yazılmış olsa bile (If FLAG_A And FLAG_X Then) blok değişmez; bloğun içindeki diğer If'ler yine işlenir.");
+        _toolTip.SetToolTip(_txtSkipDefines,
+            "Koşulunda bu sabitlerden biri geçen #If grupları, değeri bilinse bile çözülmez ve olduğu gibi kalır.\n" +
+            "Grubun içindeki bayrak If'leri yine işlenir.");
         _toolTip.SetToolTip(_txtRefDirs,
             "İsteğe bağlı. Projenin kullandığı ama kaynak klasör dışındaki kod klasörleri (ör. ortak Lib); birden çok ise ; ile ayırın.\n" +
             "'Kullanılmayan formları projeden çıkar' açıkken form adları bu klasörlerdeki .bas/.frm/.cls/... dosyalarında da aranır;\n" +
@@ -195,6 +203,9 @@ internal sealed class MainForm : Form
         opts.Controls.Add(line1, 0, 0);
         opts.Controls.Add(line2, 0, 1);
         opts.Controls.Add(line3, 0, 2);
+        var line4 = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
+        line4.Controls.AddRange([Lbl("Dokunulmayacak bayraklar:"), _txtSkipFlags, Spacer(16), Lbl("Dokunulmayacak #If sabitleri:"), _txtSkipDefines]);
+        opts.Controls.Add(line4, 0, 3);
         var grpOpts = new GroupBox { Text = "Seçenekler", Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(8, 4, 8, 4) };
         grpOpts.Controls.Add(opts);
         root.Controls.Add(grpOpts, 0, 1);
@@ -400,6 +411,8 @@ internal sealed class MainForm : Form
         _chkUndefinedZero.CheckedChanged += (_, _) => ScheduleFlagRead();
         _chkRemoveUnusedForms.CheckedChanged += (_, _) => _reportIsCurrent = false;
         _txtRefDirs.TextChanged += (_, _) => _reportIsCurrent = false;
+        _txtSkipFlags.TextChanged += (_, _) => _reportIsCurrent = false;
+        _txtSkipDefines.TextChanged += (_, _) => ScheduleFlagRead(); // bayrak dosyasındaki #If'leri de etkiler
         _txtSrc.TextChanged += (_, _) => { if (File.Exists(_txtFlags.Text.Trim())) ScheduleFlagRead(); }; // .vbp sabitleri kaynaktan gelir
         _flagReadTimer.Tick += (_, _) =>
         {
@@ -449,6 +462,9 @@ internal sealed class MainForm : Form
         if (!list.Contains(dlg.SelectedPath, StringComparer.OrdinalIgnoreCase)) list.Add(dlg.SelectedPath);
         _txtRefDirs.Text = string.Join("; ", list);
     }
+
+    private static List<string> SplitNames(string text)
+        => text.Split([',', ';', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
 
     private List<string> RefDirs()
         => _txtRefDirs.Text.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
@@ -507,6 +523,8 @@ internal sealed class MainForm : Form
             ProcessOnly = dryRun ? null : SelectedFiles(),
             RemoveUnusedForms = _chkRemoveUnusedForms.Checked,
             ReferenceDirs = RefDirs(),
+            SkipFlags = SplitNames(_txtSkipFlags.Text),
+            SkipConstants = SplitNames(_txtSkipDefines.Text),
             UsageSelection = dryRun ? SelectedFiles() : null,
             FlagOptions = new FlagReaderOptions
             {
@@ -581,6 +599,8 @@ internal sealed class MainForm : Form
         _chkCopy.Checked = defaults.CopyOtherFiles;
         _chkRemoveUnusedForms.Checked = defaults.RemoveUnusedForms;
         _txtRefDirs.Text = defaults.ReferenceDirs;
+        _txtSkipFlags.Text = defaults.SkipFlags;
+        _txtSkipDefines.Text = defaults.SkipDefines;
         _txtDefines.Text = defaults.Defines;
         _chkDirectives.Checked = defaults.ResolveDirectives;
         _chkUndefinedZero.Checked = defaults.UndefinedConstantsAreZero;
@@ -790,6 +810,7 @@ internal sealed class MainForm : Form
             var constNotes = new List<SourceNote>();
             _flagConsts = CondConstants.FromProject(Directory.Exists(src) ? src : null, po.Defines, constNotes, po.CodePage);
             _flagConsts.UndefinedIsZero = po.UndefinedConstantsAreZero;
+            foreach (var n in po.SkipConstants) _flagConsts.Skip.Add(n);
             _flagRead = FlagReader.Read(path, new FlagReaderOptions
             {
                 Mode = fo.Mode, InitProcedures = fo.InitProcedures,
@@ -1105,6 +1126,8 @@ internal sealed class MainForm : Form
         _chkCopy.Checked = _settings.CopyOtherFiles;
         _chkRemoveUnusedForms.Checked = _settings.RemoveUnusedForms;
         _txtRefDirs.Text = _settings.ReferenceDirs;
+        _txtSkipFlags.Text = _settings.SkipFlags;
+        _txtSkipDefines.Text = _settings.SkipDefines;
         _txtDefines.Text = _settings.Defines;
         _chkDirectives.Checked = _settings.ResolveDirectives;
         _chkUndefinedZero.Checked = _settings.UndefinedConstantsAreZero;
@@ -1130,6 +1153,8 @@ internal sealed class MainForm : Form
         _settings.CopyOtherFiles = _chkCopy.Checked;
         _settings.RemoveUnusedForms = _chkRemoveUnusedForms.Checked;
         _settings.ReferenceDirs = _txtRefDirs.Text.Trim();
+        _settings.SkipFlags = _txtSkipFlags.Text.Trim();
+        _settings.SkipDefines = _txtSkipDefines.Text.Trim();
         _settings.Defines = _txtDefines.Text.Trim();
         _settings.ResolveDirectives = _chkDirectives.Checked;
         _settings.UndefinedConstantsAreZero = _chkUndefinedZero.Checked;

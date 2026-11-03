@@ -55,6 +55,9 @@ public sealed class Report
     public List<string> ReferenceDirs { get; } = [];
     /// <summary>Kullanılmayan form analizinde taranan referans kod dosyası sayısı.</summary>
     public int ReferenceFileCount { get; set; }
+    /// <summary>Kullanıcının dokunulmasın dediği bayraklar ve #If sabitleri.</summary>
+    public List<string> SkipFlags { get; } = [];
+    public List<string> SkipConstants { get; } = [];
     public string? OutputDir { get; set; }
     public bool DryRun { get; set; }
     public FlagTable Flags { get; set; } = new();
@@ -91,6 +94,10 @@ public sealed class Report
             sb.AppendLine($"Referans      : {d} (salt okunur; yalnızca form adları aranır)");
         if (ReferenceFileCount > 0)
             sb.AppendLine($"Referans dosya: {ReferenceFileCount} kod dosyası tarandı (değiştirilmez, kopyalanmaz)");
+        if (SkipFlags.Count > 0)
+            sb.AppendLine($"Dokunulmayan bayraklar: {string.Join(", ", SkipFlags)} (geçtikleri If blokları olduğu gibi kalır)");
+        if (SkipConstants.Count > 0)
+            sb.AppendLine($"Dokunulmayan #If sabitleri: {string.Join(", ", SkipConstants)} (geçtikleri #If grupları olduğu gibi kalır)");
         sb.AppendLine($"Çıktı klasörü : {(DryRun ? "(kuru çalıştırma - dosya yazılmadı)" : OutputDir)}");
         sb.AppendLine();
 

@@ -37,6 +37,10 @@ public sealed class ProcessOptions
     /// bu klasörlerdeki kod dosyalarında form adları aranır; dosyalar asla değiştirilmez veya kopyalanmaz.
     /// </summary>
     public IReadOnlyCollection<string> ReferenceDirs { get; init; } = [];
+    /// <summary>Dokunulmayacak bayraklar: koşulunda bunlardan biri geçen If blokları olduğu gibi kalır (içleri yine işlenir).</summary>
+    public IReadOnlyCollection<string> SkipFlags { get; init; } = [];
+    /// <summary>Dokunulmayacak #If sabitleri: koşulunda bunlardan biri geçen #If grupları çözülmez (içleri yine işlenir).</summary>
+    public IReadOnlyCollection<string> SkipConstants { get; init; } = [];
 
     /// <summary>Bu dosya dönüştürülmeden olduğu gibi mi aktarılacak?</summary>
     public bool IsKept(string relativePath)
@@ -96,6 +100,8 @@ public static class ProjectProcessor
         var constNotes = new List<SourceNote>();
         var consts = CondConstants.FromProject(src, o.Defines, constNotes, o.CodePage);
         consts.UndefinedIsZero = o.UndefinedConstantsAreZero;
+        foreach (var n in o.SkipConstants.Select(x => x.Trim()).Where(x => x.Length > 0)) consts.Skip.Add(n);
+        report.SkipConstants.AddRange(consts.Skip.Order(StringComparer.OrdinalIgnoreCase));
         report.Constants = consts;
         report.ResolveDirectives = o.ResolveDirectives;
         report.FlagNotes.AddRange(constNotes);
@@ -153,7 +159,9 @@ public static class ProjectProcessor
 
         // 4) dönüşüm
         var outputs = new List<(string Rel, byte[] Bytes)>();
-        var rewriter = new Rewriter(flagResult.Flags, moduleNames, consts, o.ResolveDirectives);
+        var skipFlags = new HashSet<string>(o.SkipFlags.Select(x => x.Trim()).Where(x => x.Length > 0), StringComparer.OrdinalIgnoreCase);
+        report.SkipFlags.AddRange(skipFlags.Order(StringComparer.OrdinalIgnoreCase));
+        var rewriter = new Rewriter(flagResult.Flags, moduleNames, consts, o.ResolveDirectives) { SkipFlags = skipFlags };
         foreach (var (rel, file) in sources)
         {
             if (o.IsKept(rel))

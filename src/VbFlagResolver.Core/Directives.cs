@@ -28,9 +28,12 @@ public sealed class CondConstants
     /// </summary>
     public bool UndefinedIsZero { get; set; }
 
+    /// <summary>Kullanıcının dokunulmasın dediği sabitler: koşulunda geçen #If grupları çözülmez, olduğu gibi kalır.</summary>
+    public HashSet<string> Skip { get; private set; } = new(StringComparer.OrdinalIgnoreCase);
+
     public CondConstants Clone()
     {
-        var c = new CondConstants { UndefinedIsZero = UndefinedIsZero };
+        var c = new CondConstants { UndefinedIsZero = UndefinedIsZero, Skip = Skip };
         foreach (var (k, v) in _values) c._values[k] = v;
         return c;
     }
@@ -555,7 +558,14 @@ public static class DirectiveResolver
             DBranch? chosen = null;
             bool unresolved = !resolve;
             var undefinedAll = new List<string>();
-            if (resolve)
+            // kullanıcının "dokunulmasın" dediği sabit herhangi bir dalın koşulunda geçiyorsa grup olduğu gibi kalır
+            var skipped = consts.Skip.Count == 0 ? null : g.Branches.Where(b => b.Condition != null)
+                .SelectMany(b => b.Condition!).FirstOrDefault(t => t.Kind == TokenKind.Identifier && consts.Skip.Contains(t.Text));
+            if (resolve && skipped != null)
+            {
+                unresolved = true; // bilinçli: uyarı verilmez (raporun başında dokunulmayan sabitler listelenir)
+            }
+            else if (resolve)
             {
                 foreach (var b in g.Branches)
                 {
@@ -570,7 +580,7 @@ public static class DirectiveResolver
 
             if (unresolved)
             {
-                if (resolve)
+                if (resolve && skipped == null)
                     r.Warnings.Add(new SourceNote(fileName, g.Branches[0].Header.LineNumber,
                         $"#If {condText} çözülemedi" +
                         (undefinedAll.Count > 0 ? $" (tanımsız/bilinmeyen sabit: {string.Join(", ", undefinedAll.Distinct(StringComparer.OrdinalIgnoreCase))})" : "") +

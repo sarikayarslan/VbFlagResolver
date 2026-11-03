@@ -18,6 +18,9 @@ internal sealed class GuiSettings
     public bool RemoveUnusedForms { get; set; }
     /// <summary>Salt okunur referans klasörleri (ör. Lib), ';' ile ayrılmış.</summary>
     public string ReferenceDirs { get; set; } = "";
+    /// <summary>Dokunulmayacak bayraklar ve #If sabitleri (virgülle).</summary>
+    public string SkipFlags { get; set; } = "";
+    public string SkipDefines { get; set; } = "";
     /// <summary>Kullanıcının verdiği derleme sabitleri ("DEBUG_MODE=0, X=1").</summary>
     public string Defines { get; set; } = "";
     public bool ResolveDirectives { get; set; } = true;

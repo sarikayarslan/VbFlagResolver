@@ -33,6 +33,8 @@ internal static class Program
                                  * ve ? kullanılabilir (ör. frmEski.frm,Moduller\*.bas). Tekrar verilebilir.
           --only <dosyalar>      Yalnızca bu dosyaları temizle, diğerlerini olduğu gibi aktar (--keep ile aynı desenler).
           --remove-unused-forms  Projede hiçbir yerde kullanılmayan formları çıktıdaki .vbp'den çıkar (.frm/.frx kopyalanmaz).
+          --skip-flags <adlar>   Dokunulmayacak bayraklar, virgülle: koşulunda geçtikleri If blokları olduğu gibi kalır.
+          --skip-defines <adlar> Dokunulmayacak #If sabitleri, virgülle: koşulunda geçtikleri #If grupları çözülmez.
           --lib <klasör>         İsteğe bağlı referans klasörü (ör. ortak Lib); form adları burada da aranır. Salt okunur:
                                  dosyalarına asla dokunulmaz. Tekrar verilebilir.
           --no-copy              Kaynak olmayan dosyaları (.frx, .vbp, ...) çıktıya kopyalama.
@@ -53,6 +55,8 @@ internal static class Program
         string[]? exts = null;
         var keep = new List<string>();
         var libs = new List<string>();
+        var skipFlags = new List<string>();
+        var skipDefines = new List<string>();
         List<string>? only = null;
         int codePage = 1254;
 
@@ -71,6 +75,8 @@ internal static class Program
                     case "--dry-run": dryRun = true; break;
                     case "--remove-unused-forms": removeUnusedForms = true; break;
                     case "--lib": libs.Add(Next()); break;
+                    case "--skip-flags": skipFlags.AddRange(SplitList(Next())); break;
+                    case "--skip-defines": skipDefines.AddRange(SplitList(Next())); break;
                     case "--no-copy": noCopy = true; break;
                     case "--unassigned-unknown": unassignedUnknown = true; break;
                     case "--define": defines = defines == null ? Next() : defines + "," + Next(); break;
@@ -135,6 +141,8 @@ internal static class Program
                 ProcessOnly = only,
                 RemoveUnusedForms = removeUnusedForms,
                 ReferenceDirs = libs,
+                SkipFlags = skipFlags,
+                SkipConstants = skipDefines,
                 UndefinedConstantsAreZero = !undefinedUnknown,
             };
             // rapor da orijinal dosyaların üzerine yazılamaz; dönüşümden önce kontrol et

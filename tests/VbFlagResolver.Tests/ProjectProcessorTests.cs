@@ -617,6 +617,60 @@ public class ProjectProcessorTests
     }
 
     [Fact]
+    public void Skip_flags_leave_their_if_blocks_untouched_but_process_inner_blocks()
+    {
+        var src = TestPaths.NewTempDir();
+        File.WriteAllText(Path.Combine(src, "mFlags.bas"),
+            "Attribute VB_Name = \"mFlags\"\r\nPublic Const FT = True\r\nPublic Const FF = False\r\nPublic Const FX = True\r\n");
+        File.WriteAllText(Path.Combine(src, "modA.bas"),
+            "Sub A()\r\n" +
+            "    If FX Then\r\n        If FF Then\r\n            a = 1\r\n        End If\r\n        b = 1\r\n    End If\r\n" +   // dış blok dokunulmaz, iç işlenir
+            "    If FT And FX Then\r\n        c = 1\r\n    End If\r\n" +                                          // başka bayrakla birlikte: dokunulmaz
+            "    If y Then\r\n        d = 1\r\n    ElseIf FX Then\r\n        d = 2\r\n    End If\r\n" +              // dalın birinde: blok aynı
+            "    If FX Then e = 1 Else e = 2\r\n" +                                                              // tek satırlık If
+            "    If FT Then\r\n        f = 1\r\n    End If\r\n" +                                                   // diğer bayraklar işlenir
+            "End Sub\r\n");
+        var outDir = TestPaths.NewTempDir();
+        var report = ProjectProcessor.Run(new ProcessOptions
+        {
+            FlagsPath = Path.Combine(src, "mFlags.bas"), SourceDir = src, OutputDir = outDir, SkipFlags = ["fx"], // harf duyarsız
+        });
+        Assert.Equal(
+            "Sub A()\r\n" +
+            "    If FX Then\r\n        b = 1\r\n    End If\r\n" +
+            "    If FT And FX Then\r\n        c = 1\r\n    End If\r\n" +
+            "    If y Then\r\n        d = 1\r\n    ElseIf FX Then\r\n        d = 2\r\n    End If\r\n" +
+            "    If FX Then e = 1 Else e = 2\r\n" +
+            "    f = 1\r\n" +
+            "End Sub\r\n", File.ReadAllText(Path.Combine(outDir, "modA.bas")));
+        Assert.Contains("Dokunulmayan bayraklar: fx", report.ToText());
+    }
+
+    [Fact]
+    public void Skip_defines_leave_their_directive_groups_untouched()
+    {
+        var src = TestPaths.NewTempDir();
+        File.WriteAllText(Path.Combine(src, "mFlags.bas"), "Attribute VB_Name = \"mFlags\"\r\nPublic Const FF = False\r\n");
+        File.WriteAllText(Path.Combine(src, "P.vbp"), "Type=Exe\r\nCondComp=\"DEM = 1 : DBG = 0\"\r\n");
+        File.WriteAllText(Path.Combine(src, "modA.bas"),
+            "Sub A()\r\n" +
+            "#If DEM = 1 Then\r\n    If FF Then\r\n        a = 1\r\n    End If\r\n    b = 1\r\n#Else\r\n    b = 2\r\n#End If\r\n" +
+            "#If DBG Then\r\n    c = 1\r\n#End If\r\n" +
+            "End Sub\r\n");
+        var outDir = TestPaths.NewTempDir();
+        var report = ProjectProcessor.Run(new ProcessOptions
+        {
+            FlagsPath = Path.Combine(src, "mFlags.bas"), SourceDir = src, OutputDir = outDir, SkipConstants = ["DEM"],
+        });
+        Assert.Equal(
+            "Sub A()\r\n" +
+            "#If DEM = 1 Then\r\n    b = 1\r\n#Else\r\n    b = 2\r\n#End If\r\n" +   // DEM grubu kaldı, içindeki bayrak If'i işlendi
+            "End Sub\r\n", File.ReadAllText(Path.Combine(outDir, "modA.bas")));  // DBG grubu yine çözüldü
+        Assert.DoesNotContain(report.Files.Single().Warnings, w => w.Message.Contains("DEM"));
+        Assert.Contains("Dokunulmayan #If sabitleri: DEM", report.ToText());
+    }
+
+    [Fact]
     public void Output_inside_source_is_refused()
         => Assert.Throws<ArgumentException>(() => ProjectProcessor.Run(Options(Path.Combine(TestPaths.SamplesDir, "out"))));
 

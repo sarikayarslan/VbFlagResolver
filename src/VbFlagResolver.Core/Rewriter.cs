@@ -171,8 +171,15 @@ public sealed class Rewriter
         }
     }
 
+    /// <summary>Kullanıcının dokunulmasın dediği bayraklar: koşulunda geçen If'e (bütün bloğuyla) dokunulmaz.</summary>
+    public ISet<string> SkipFlags { get; init; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+    private bool HasSkipFlag(ClassifiedLine h)
+        => SkipFlags.Count > 0 && h.ConditionTokens.Any(t => t.Kind == TokenKind.Identifier && SkipFlags.Contains(t.Text));
+
     private void EmitSingleIf(ClassifiedLine c, List<OutputLine> o)
     {
+        if (HasSkipFlag(c)) { Verbatim(c, o); return; }
         var r = Evaluate(c);
         if (r is not { Changed: true })
         {
@@ -236,6 +243,17 @@ public sealed class Rewriter
 
     private void EmitIf(IfBlock blk, List<OutputLine> o)
     {
+        // dalların herhangi birinde dokunulmayacak bayrak varsa blok yapısı aynen kalır; gövdeler yine işlenir
+        if (blk.Branches.Any(b => HasSkipFlag(b.Header)))
+        {
+            foreach (var b in blk.Branches)
+            {
+                Verbatim(b.Header, o);
+                EmitNodes(b.Body, o);
+            }
+            Verbatim(blk.End!, o);
+            return;
+        }
         var removed = new List<Branch>();
         var kept = new List<(Branch B, Tri V, SimplifyResult? R)>();
         foreach (var b in blk.Branches)
