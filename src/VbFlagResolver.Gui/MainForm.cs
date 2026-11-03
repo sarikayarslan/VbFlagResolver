@@ -55,6 +55,8 @@ internal sealed class MainForm : Form
     private readonly ComboBox _cmbFlagValue = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 130 };
     private readonly Label _lblFlagSummary = new() { AutoSize = true, Padding = new Padding(8, 4, 0, 0) };
     private readonly ListView _lvUnrecognized = NewListView();
+    private readonly ListView _lvConsts = NewListView();
+    private readonly Label _lblConsts = new() { AutoSize = true, Padding = new Padding(4, 6, 4, 4), ForeColor = Color.DimGray };
     private readonly TextBox _txtFlagDetail = new()
     {
         Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, WordWrap = true,
@@ -219,6 +221,7 @@ internal sealed class MainForm : Form
         // sekmeler
         _tabs.TabPages.Add(BuildFilesTab());
         _tabs.TabPages.Add(BuildFlagsTab());
+        _tabs.TabPages.Add(BuildConstantsTab());
         _tabs.TabPages.Add(BuildReportTab());
         root.Controls.Add(_tabs, 0, 3);
 
@@ -347,6 +350,51 @@ internal sealed class MainForm : Form
             }
         };
         return page;
+    }
+
+    private TabPage BuildConstantsTab()
+    {
+        AddColumn(_lvConsts, "Sabit", 170);
+        AddColumn(_lvConsts, "Değer", 90);
+        AddColumn(_lvConsts, "Kaynak", 330);
+        AddColumn(_lvConsts, "Durum", 230);
+        AddColumn(_lvConsts, "#If sayısı", 70, HorizontalAlignment.Right);
+        AddColumn(_lvConsts, "Dosyalar", 400);
+        var page = new TabPage("Derleme sabitleri");
+        page.Controls.Add(_lvConsts);
+        page.Controls.Add(_lblConsts);
+        _lblConsts.Dock = DockStyle.Top;
+        return page;
+    }
+
+    /// <summary>
+    /// Derleme sabitleri sekmesi: önizlemeden sonra tablo rapordan (kullanım sayıları ve tanımsız sabitlerle); öncesinde
+    /// yalnızca .vbp ve "Derleme sabitleri" alanındaki tanımlar.
+    /// </summary>
+    private void FillConstants()
+    {
+        var consts = _reportIsCurrent && _report != null ? _report.Constants : _flagConsts;
+        var rows = _reportIsCurrent && _report != null ? _report.ConstantTable
+            : consts != null ? ProjectProcessor.BuildConstantTable(consts, []) : [];
+        _lvConsts.BeginUpdate();
+        _lvConsts.Items.Clear();
+        foreach (var c in rows)
+        {
+            var item = new ListViewItem([c.Name, c.Value, c.Source, c.Status, c.Uses.ToString(), string.Join(", ", c.Files)]);
+            if (c.Status.StartsWith("tanımsız")) item.ForeColor = Color.DarkOrange;
+            else if (c.Status.StartsWith("dokunulmuyor")) item.ForeColor = Color.SteelBlue;
+            else if (c.Value == "bilinmiyor") item.ForeColor = Color.Firebrick;
+            else if (c.Uses == 0) item.ForeColor = Color.Gray;
+            _lvConsts.Items.Add(item);
+        }
+        _lvConsts.EndUpdate();
+        string rule = consts?.UndefinedIsZero != false ? "tanımsız sabitler 0 sayılır" : "tanımsız sabit içeren gruplar olduğu gibi bırakılır";
+        _lblConsts.Text = rows.Count == 0
+            ? "Derleme sabiti yok. Önizle'ye basınca #If'lerde kullanılan sabitler de listelenir."
+            : $"{rows.Count} sabit ({rule}). " + (_reportIsCurrent && _report != null
+                ? $"Tanımsız: {rows.Count(r => r.Status.StartsWith("tanımsız"))}, bilinmiyor: {rows.Count(r => r.Value == "bilinmiyor")}."
+                : "Kullanım sayıları ve tanımsız sabitler Önizle'den sonra görünür.");
+        _tabs.TabPages[2].Text = $"Derleme sabitleri ({rows.Count})";
     }
 
     private TabPage BuildReportTab()
@@ -883,6 +931,7 @@ internal sealed class MainForm : Form
 
     private void FillFlags()
     {
+        FillConstants(); // bayraklarla aynı anlarda (okuma, önizleme, temizleme) güncellenir
         var src = FlagSource();
         _lvFlags.BeginUpdate();
         _lvFlags.Items.Clear();

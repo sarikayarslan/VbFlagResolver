@@ -175,6 +175,10 @@ Tek dosyalık exe ilk açılışta kendini birkaç saniye içinde hazırlar; son
    - **Bayraklar:** önizlemeden sonra kullanıldıkları dosya sayısı ve formlardaki atamalar nedeniyle Bilinmiyor
      olanlar da eklenir; arama ve değere göre filtre (True/False/Bilinmiyor/kullanılmayan); bayrak dosyasında
      tanınmayan satırlar.
+   - **Derleme sabitleri:** `#If` sabitlerinin tablosu: değer, kaynak (`.vbp` CondComp, "Derleme sabitleri" alanı, VB
+     yerleşik `Win32`/`Win16`, dosya içi `#Const`), durum (kullanılıyor, tanımlı ama kullanılmıyor, tanımsız → 0 sayıldı,
+     farklı `.vbp` değerleri → bilinmiyor, dokunulmuyor), kaç `#If`/`#ElseIf` koşulunda ve hangi dosyalarda geçtiği.
+     Tanımlamayı unuttuğunuz sabitler turuncu görünür. Aynı tablo raporun "Koşullu derleme sabitleri" bölümündedir.
    - **Rapor:** komut satırının ürettiği raporun aynısı; **Raporu kaydet** ile dosyaya yazılır.
 3. Temizlenecek dosyaları işaretleyip **Dönüştür ve çıktıya yaz**. Hiç dosya seçilmediyse veya çıktı klasörü boş
    değilse onay istenir; kaynak klasöre asla yazılmaz.

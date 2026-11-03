@@ -671,6 +671,35 @@ public class ProjectProcessorTests
     }
 
     [Fact]
+    public void Constant_table_lists_defined_used_undefined_local_and_skipped_constants()
+    {
+        var src = TestPaths.NewTempDir();
+        File.WriteAllText(Path.Combine(src, "mFlags.bas"), "Attribute VB_Name = \"mFlags\"\r\nPublic Const FT = True\r\n");
+        File.WriteAllText(Path.Combine(src, "P.vbp"), "Type=Exe\r\nCondComp=\"DBG = 1 : KULLANILMAYAN = 0\"\r\n");
+        File.WriteAllText(Path.Combine(src, "modA.bas"),
+            "#Const YEREL = 1\r\nSub A()\r\n" +
+            "#If DBG And DEM = 1 Then\r\n    a = 1\r\n#End If\r\n" +
+            "#If YEREL Then\r\n    b = 1\r\n#End If\r\n" +
+            "#If Win32 Then\r\n    c = 1\r\n#End If\r\n" +
+            "End Sub\r\n");
+        var report = ProjectProcessor.Run(new ProcessOptions
+        {
+            FlagsPath = Path.Combine(src, "mFlags.bas"), SourceDir = src, DryRun = true, SkipConstants = ["THE"],
+        });
+        ConstantRow Row(string n) => report.ConstantTable.Single(r => r.Name == n);
+        Assert.Equal(("1", "kullanılıyor", 1), (Row("DBG").Value, Row("DBG").Status, Row("DBG").Uses));
+        Assert.Contains("P.vbp", Row("DBG").Source);
+        Assert.Equal("tanımlı, kullanılmıyor", Row("KULLANILMAYAN").Status);
+        Assert.Equal(("0", "tanımsız: 0 sayıldı"), (Row("DEM").Value, Row("DEM").Status));
+        Assert.Equal(["modA.bas"], Row("DEM").Files);
+        Assert.Equal("1", Row("YEREL").Value);
+        Assert.Contains("#Const", Row("YEREL").Source);
+        Assert.Equal("VB yerleşik", Row("Win32").Source);
+        Assert.StartsWith("dokunulmuyor", Row("THE").Status);
+        Assert.Contains("Sabit tablosu", report.ToText());
+    }
+
+    [Fact]
     public void Output_inside_source_is_refused()
         => Assert.Throws<ArgumentException>(() => ProjectProcessor.Run(Options(Path.Combine(TestPaths.SamplesDir, "out"))));
 

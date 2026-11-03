@@ -74,6 +74,7 @@ public sealed class Rewriter
             _report.Warnings.Add(new SourceNote(_report.RelativePath, dr.ErrorLine, $"#If yapısı çözümlenemedi: {dr.Error}; #If satırları olduğu gibi bırakıldı"));
         _report.Warnings.AddRange(dr.Warnings);
         _report.Changes.AddRange(dr.Changes);
+        _report.Directives = dr;
         if (dr.Changed) _changed = true;
         _directiveCommentOnly = dr.CommentOnly;
         IndexProcedures(dr.Kept);

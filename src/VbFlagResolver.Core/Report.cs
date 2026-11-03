@@ -24,6 +24,10 @@ public sealed record ProcedureCall(string File, int Line, string Caller, string 
 /// <summary>Projede kullanılmadığı için .vbp'den çıkarılan form.</summary>
 public sealed record RemovedForm(string RelativePath, string Name, string Reason);
 
+/// <summary>Derleme sabitleri tablosundaki bir satır.</summary>
+/// <param name="Uses">Kaç #If/#ElseIf koşulunda geçtiği.</param>
+public sealed record ConstantRow(string Name, string Value, string Source, string Status, int Uses, IReadOnlyList<string> Files);
+
 /// <summary>Kullanılmayan form analizinde projede kalan form ve nedeni (nerede kullanıldığı).</summary>
 public sealed record KeptForm(string RelativePath, string Name, string Reason);
 
@@ -34,6 +38,8 @@ public sealed class FileReport
     public List<SourceNote> Warnings { get; } = [];
     public bool Changed { get; set; }
     public bool Failed { get; set; }
+    /// <summary>Bu dosyanın #If çözümlemesi (sabit kullanımları, tanımsız sabitler, #Const'lar).</summary>
+    public DirectiveResult? Directives { get; set; }
     /// <summary>Kullanıcı işaretledi: dönüştürülmeden olduğu gibi aktarıldı (atama/gölgeleme taraması yine yapılır).</summary>
     public bool KeptAsIs { get; set; }
     /// <summary>Kullanılmayan form: çıktıdaki .vbp'den çıkarıldı, dosya çıktıya kopyalanmadı.</summary>
@@ -77,6 +83,8 @@ public sealed class Report
     public List<RemovedForm> RemovedForms { get; } = [];
     /// <summary>Kullanılmayan form analizinde projede kalan formlar ve neden kaldıkları.</summary>
     public List<KeptForm> KeptForms { get; } = [];
+    /// <summary>Derleme sabitleri: tanımlılar, kullanılanlar, tanımsız olup 0 sayılanlar, #Const'lar.</summary>
+    public List<ConstantRow> ConstantTable { get; } = [];
     public List<SourceNote> FormNotes { get; } = [];
     public Dictionary<string, int> FlagUsage { get; } = new(StringComparer.OrdinalIgnoreCase);
 
@@ -186,11 +194,23 @@ public sealed class Report
         if (Constants.Count == 0)
         {
             sb.AppendLine($"Koşullu derleme sabitleri: yok (.vbp'de CondComp bulunamadı). {undefinedRule}");
+            AppendConstantTable(sb);
             return;
         }
         sb.AppendLine($"Koşullu derleme sabitleri: {Constants.Count}. {undefinedRule}");
-        foreach (var (name, value, source) in Constants.All)
-            sb.AppendLine($"  {name} = {(value is { } v ? v.ToString() : "bilinmiyor")}  ({source})");
+        if (ConstantTable.Count == 0)
+            foreach (var (name, value, source) in Constants.All)
+                sb.AppendLine($"  {name} = {(value is { } v ? v.ToString() : "bilinmiyor")}  ({source})");
+        AppendConstantTable(sb);
+    }
+
+    private void AppendConstantTable(StringBuilder sb)
+    {
+        if (ConstantTable.Count == 0) return;
+        sb.AppendLine("  Sabit tablosu (ad = değer | kaynak | durum | #If sayısı | dosyalar):");
+        foreach (var c in ConstantTable)
+            sb.AppendLine($"  {c.Name} = {c.Value} | {c.Source} | {c.Status} | {c.Uses}" +
+                          (c.Files.Count > 0 ? $" | {Abbrev(c.Files.ToList(), 5)}" : ""));
     }
 
     /// <summary>Bayrak yordamları, çalıştırma kökleri ve projede çağrıldıkları yerler.</summary>

@@ -143,13 +143,18 @@ public static class ProjectProcessor
         // 3) bayrağa atama / gölgeleme taraması; bayrak yordamlarının çağrıldığı yerler
         report.FlagProcedures.AddRange(flagResult.Procedures);
         var procNames = new HashSet<string>(flagResult.Procedures.Select(p => p.Name), StringComparer.OrdinalIgnoreCase);
+        var directivesByFile = new List<(string Rel, DirectiveResult Result)>();
+        if (flagResult.Directives != null) directivesByFile.Add((Path.GetFileName(flagsPath), flagResult.Directives));
         foreach (var (rel, file) in sources)
         {
             // yalnızca derlenen satırlar: derlenmeyen #If dalındaki atama bayrağı Bilinmiyor yapmamalı
-            var active = DirectiveResolver.Resolve(file.GetLogicalLines(), consts, o.ResolveDirectives, rel).Kept;
+            var dres = DirectiveResolver.Resolve(file.GetLogicalLines(), consts, o.ResolveDirectives, rel);
+            directivesByFile.Add((rel, dres));
+            var active = dres.Kept;
             ScanAssignments(file, rel, flagResult.Flags, moduleNames, report, active);
             if (procNames.Count > 0) report.ProcedureCalls.AddRange(ScanProcedureCalls(file, rel, procNames, moduleNames, active));
         }
+        if (o.ResolveDirectives) report.ConstantTable.AddRange(BuildConstantTable(consts, directivesByFile));
         // çalıştırıldığı varsayılan ama projede hiç çağrılmayan bayrak yordamları
         foreach (var p in flagResult.Procedures.Where(p => p.IsRoot && p.AssignsFlags))
             if (!report.ProcedureCalls.Any(c => c.Procedure.Equals(p.Name, StringComparison.OrdinalIgnoreCase)))
@@ -295,6 +300,79 @@ public static class ProjectProcessor
             start = end;
         }
         return result.ToArray();
+    }
+
+    /// <summary>
+    /// Derleme sabitleri tablosu: tanımlı sabitler (.vbp/kullanıcı), #If'lerde kullanılan ama tanımsız olanlar (0 sayılan),
+    /// VB yerleşikleri, dosya #Const'ları ve dokunulmayacaklar; her biri için kaç koşulda ve hangi dosyalarda geçtiği.
+    /// </summary>
+    public static List<ConstantRow> BuildConstantTable(CondConstants consts, IEnumerable<(string Rel, DirectiveResult Result)> files)
+    {
+        var uses = new Dictionary<string, (int Count, SortedSet<string> Files)>(StringComparer.OrdinalIgnoreCase);
+        var undefinedZero = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var local = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        var localValues = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (rel, r) in files)
+        {
+            foreach (var (name, n) in r.ConstantUses)
+            {
+                if (!uses.TryGetValue(name, out var u)) uses[name] = u = (0, new SortedSet<string>(StringComparer.OrdinalIgnoreCase));
+                u.Files.Add(rel);
+                uses[name] = (u.Count + n, u.Files);
+            }
+            undefinedZero.UnionWith(r.UndefinedAsZero);
+            foreach (var (name, value, line) in r.LocalConstants)
+            {
+                if (!local.TryGetValue(name, out var l)) local[name] = l = [];
+                l.Add($"{rel} satır {line} #Const = {value}");
+                if (!localValues.TryGetValue(name, out var lv)) localValues[name] = lv = [];
+                lv.Add(value);
+            }
+        }
+
+        var rows = new List<ConstantRow>();
+        var names = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+        names.UnionWith(consts.All.Select(c => c.Name));
+        names.UnionWith(uses.Keys);
+        names.UnionWith(local.Keys);
+        names.UnionWith(consts.Skip);
+        foreach (var name in names)
+        {
+            var (count, fileSet) = uses.TryGetValue(name, out var u) ? u : (0, new SortedSet<string>());
+            string value, source, status;
+            if (consts.TryGet(name, out var v))
+            {
+                var src = consts.All.First(c => c.Name.Equals(name, StringComparison.OrdinalIgnoreCase)).Source;
+                value = v?.ToString() ?? "bilinmiyor";
+                source = src;
+                status = v == null ? (src.Contains("farklı") ? "farklı .vbp değerleri: bilinmiyor" : "bilinmiyor") : count > 0 ? "kullanılıyor" : "tanımlı, kullanılmıyor";
+            }
+            else if (name.Equals("Win32", StringComparison.OrdinalIgnoreCase) || name.Equals("Win16", StringComparison.OrdinalIgnoreCase))
+            {
+                value = name.Equals("Win32", StringComparison.OrdinalIgnoreCase) ? "True" : "False";
+                source = "VB yerleşik";
+                status = count > 0 ? "kullanılıyor" : "tanımlı, kullanılmıyor";
+            }
+            else if (local.ContainsKey(name))
+            {
+                value = localValues[name].Count == 1 ? localValues[name].First() : "dosyaya göre";
+                source = "yalnızca dosya içi #Const";
+                status = count > 0 ? "kullanılıyor" : "tanımlı, kullanılmıyor";
+            }
+            else
+            {
+                value = consts.UndefinedIsZero ? "0" : "bilinmiyor";
+                source = "tanımlı değil";
+                status = count == 0 ? "kullanılmıyor"
+                    : consts.UndefinedIsZero && undefinedZero.Contains(name) ? "tanımsız: 0 sayıldı"
+                    : "tanımsız: grup olduğu gibi bırakıldı";
+            }
+            if (local.TryGetValue(name, out var l) && !source.StartsWith("yalnızca")) source += "; " + string.Join("; ", l);
+            else if (local.TryGetValue(name, out l)) source += ": " + string.Join("; ", l);
+            if (consts.Skip.Contains(name)) status = "dokunulmuyor (kullanıcı listesi)" + (count == 0 ? ", kullanılmıyor" : "");
+            rows.Add(new ConstantRow(name, value, source, status, count, fileSet.ToList()));
+        }
+        return rows;
     }
 
     private static void Write(WriteGuard guard, string outDir, string rel, byte[] bytes)

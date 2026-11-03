@@ -435,6 +435,12 @@ public sealed class DirectiveResult
     public string? Error { get; set; }
     public int ErrorLine { get; set; }
     public bool Changed => Changes.Count > 0;
+    /// <summary>#If/#ElseIf koşullarında geçen sabitler → kaç koşulda geçtiği.</summary>
+    public Dictionary<string, int> ConstantUses { get; } = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>Hiçbir yerde tanımlı olmadığı için 0 sayılan sabitler.</summary>
+    public HashSet<string> UndefinedAsZero { get; } = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>Dosyadaki #Const tanımları (ad, değer, satır).</summary>
+    public List<(string Name, string Value, int Line)> LocalConstants { get; } = [];
 }
 
 /// <summary>
@@ -555,6 +561,10 @@ public static class DirectiveResolver
 
             var g = (DGroup)node;
             string condText = CondText(g.Branches[0]);
+            foreach (var b in g.Branches.Where(b => b.Condition != null))
+                foreach (var name in b.Condition!.Where(t => t.Kind == TokenKind.Identifier && !OperatorWords.Any(t.Is))
+                             .Select(t => t.Text).Distinct(StringComparer.OrdinalIgnoreCase))
+                    r.ConstantUses[name] = r.ConstantUses.GetValueOrDefault(name) + 1;
             DBranch? chosen = null;
             bool unresolved = !resolve;
             var undefinedAll = new List<string>();
@@ -601,6 +611,8 @@ public static class DirectiveResolver
                 continue;
             }
 
+            if (consts.UndefinedIsZero)
+                foreach (var u in undefinedAll) r.UndefinedAsZero.Add(u);
             string what = chosen == null ? "hiçbir dal derlenmiyor, grup silindi"
                 : chosen == g.Branches[0] ? "#If dalı kaldı"
                 : chosen.Condition == null ? "#Else dalı kaldı"
@@ -644,6 +656,8 @@ public static class DirectiveResolver
     }
 
     /// <summary>#Const AD = ifade: koşulsuz bölgede değer atanır; koşullu bölgede sabit bilinmiyor olur.</summary>
+    private static readonly string[] OperatorWords = ["And", "Or", "Not", "Xor", "Eqv", "Imp", "Mod", "Is", "Like", "True", "False", "Empty"];
+
     private static void ApplyConst(LogicalLine l, CondConstants consts, string? conditional, DirectiveResult r, string fileName)
     {
         var t = l.Tokens.Where(x => x.Kind != TokenKind.Comment).ToList();
@@ -656,5 +670,6 @@ public static class DirectiveResolver
         }
         var v = DirectiveEvaluator.Evaluate(t.GetRange(3, t.Count - 3), consts, out _);
         consts.Set(name, v.Known ? v : null, $"{fileName}:{l.LineNumber} #Const");
+        r.LocalConstants.Add((name, v.Known ? v.ToString() : "bilinmiyor", l.LineNumber));
     }
 }
