@@ -10,18 +10,21 @@ public static class UnusedForms
     {
         public required string Rel { get; init; }
         public required VbSourceFile File { get; init; }
-        public HashSet<string> Idents { get; } = new(StringComparer.OrdinalIgnoreCase);
+        /// <summary>Tanımlayıcı → ilk geçtiği satır.</summary>
+        public Dictionary<string, int> Idents { get; } = new(StringComparer.OrdinalIgnoreCase);
         public List<(string Text, int Line)> Strings { get; } = [];
     }
 
     /// <param name="sources">(göreli yol, dosya içeriği: temizlenmişse çıktı baytları, değilse orijinal)</param>
     /// <param name="sourceDir">Göreli yolların kökü (.vbp'deki Form= yollarını çözmek için).</param>
     /// <param name="protectedRels">Hiçbir zaman çıkarılmayacak ve kök sayılacak kaynaklar (ör. olduğu gibi aktarılan formlar).</param>
-    public static (List<RemovedForm> Removed, List<SourceNote> Notes) Find(
+    /// <param name="cleanedRels">Temizlenmiş içerikle verilen kaynaklar (satır numaraları çıktıdaki yeni satırlardır).</param>
+    public static (List<RemovedForm> Removed, List<KeptForm> Kept, List<SourceNote> Notes) Find(
         IReadOnlyList<(string Rel, VbSourceFile File)> sources, IReadOnlyList<(string Rel, byte[] Bytes)> vbpFiles, int codePage,
-        string sourceDir, ISet<string>? protectedRels = null)
+        string sourceDir, ISet<string>? protectedRels = null, ISet<string>? cleanedRels = null)
     {
         protectedRels ??= new HashSet<string>();
+        cleanedRels ??= new HashSet<string>();
         var infos = new List<Info>();
         foreach (var (rel, file) in sources)
         {
@@ -29,7 +32,7 @@ public static class UnusedForms
             foreach (var line in file.GetLogicalLines())
                 foreach (var t in line.Tokens)
                 {
-                    if (t.Kind == TokenKind.Identifier) info.Idents.Add(t.Text);
+                    if (t.Kind == TokenKind.Identifier) info.Idents.TryAdd(t.Text, line.LineNumber);
                     else if (t.Kind == TokenKind.String) info.Strings.Add((t.Text, line.LineNumber));
                 }
             infos.Add(info);
@@ -78,7 +81,7 @@ public static class UnusedForms
         {
             // başlangıç formu bilinmeden "kullanılmıyor" kararı verilemez
             notes.Add(new SourceNote("", 0, "Kaynak klasörde .vbp bulunamadı; kullanılmayan form analizi yapılmadı, hiçbir form çıkarılmadı"));
-            return ([], notes);
+            return ([], [], notes);
         }
 
         // Ulaşılabilirlik: kökler form olmayan tüm modüller (.bas/.cls/.ctl, bayrak dosyası) ve başlangıç formu.
@@ -97,7 +100,7 @@ public static class UnusedForms
             {
                 if (alive.Contains(f)) continue;
                 var name = NameOf(f);
-                bool used = alive.Any(s => s != f && s.Idents.Contains(name));
+                bool used = alive.Any(s => s != f && s.Idents.ContainsKey(name));
                 if (!used)
                 {
                     foreach (var s in alive)
@@ -124,9 +127,31 @@ public static class UnusedForms
         foreach (var f in forms.Where(removedInfo.Contains))
         {
             var name = NameOf(f);
-            bool referenced = infos.Any(s => s != f && s.Idents.Contains(name));
+            bool referenced = infos.Any(s => s != f && s.Idents.ContainsKey(name));
             removed.Add(new RemovedForm(f.Rel, name, referenced ? "yalnızca kullanılmayan formlardan çağrılıyor" : "kullanılmıyor"));
         }
-        return (removed, notes);
+
+        // projede kalan formlar ve nedeni (nerede kullanıldığı); referans (Lib) klasöründeki formlar listelenmez
+        string Where(Info s, int line) => $"{s.Rel} satır {line}{(cleanedRels.Contains(s.Rel) ? " (çıktıdaki satır)" : "")}";
+        var kept = new List<KeptForm>();
+        foreach (var f in forms.Where(f => alive.Contains(f) && !Path.IsPathRooted(f.Rel)))
+        {
+            var name = NameOf(f);
+            string reason;
+            // form olmayan modüllerdeki kullanımlar önce gösterilir
+            var refs = alive.Where(s => s != f && s.Idents.ContainsKey(name))
+                .OrderBy(s => formSet.Contains(s)).ThenBy(s => s.Rel, StringComparer.OrdinalIgnoreCase).ToList();
+            if (startup.Contains(name)) reason = ".vbp başlangıç formu (Startup)";
+            else if (protectedRels.Contains(f.Rel)) reason = "olduğu gibi aktarılıyor veya işlenmiyor; çıkarılmaz";
+            else if (!IsCandidate(f)) reason = "hiçbir .vbp'de listelenmiyor; çıkarılmaz";
+            else if (refs.Count > 0)
+                reason = $"kullanıldığı yer: {Where(refs[0], refs[0].Idents[name])}" + (refs.Count > 1 ? $" (+{refs.Count - 1} dosyada daha)" : "");
+            else if (alive.FirstOrDefault(s => s != f && s.Strings.Any(x => regex[f].IsMatch(x.Text))) is { } str)
+                reason = $"adı string içinde geçiyor: {Where(str, str.Strings.First(x => regex[f].IsMatch(x.Text)).Line)}";
+            else if (mdiParent.Contains(f)) reason = "MDI ana formu; kullanılan bir MDI alt formu var";
+            else reason = "kullanılıyor";
+            kept.Add(new KeptForm(f.Rel, name, reason));
+        }
+        return (removed, kept, notes);
     }
 }

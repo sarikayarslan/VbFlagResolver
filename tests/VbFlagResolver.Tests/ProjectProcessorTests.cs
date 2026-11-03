@@ -321,12 +321,33 @@ public class ProjectProcessorTests
 
         // Lib dönüştürülmez: içindeki "If F1 Then frmEski.Show" olduğu gibi sayılır, form kalır
         Assert.Empty(report.RemovedForms);
+        var kept = report.KeptForms.Single(k => k.Name == "frmEski");
+        Assert.Contains("modOrtak.bas satır 3", kept.Reason);   // nerede kullanıldığı
+        Assert.Contains("KULLANILAN FORMLAR", report.ToText());
         Assert.True(File.Exists(Path.Combine(outDir, "frmEski.frm")));
         Assert.Equal(2, report.ReferenceFileCount);
         Assert.Contains("salt okunur", report.ToText());
         // Lib dosyaları değişmedi ve çıktıya kopyalanmadı
         foreach (var (f, bytes) in before) Assert.Equal(bytes, File.ReadAllBytes(f));
         Assert.False(File.Exists(Path.Combine(outDir, "modOrtak.bas")));
+    }
+
+    [Fact]
+    public void Kept_forms_report_where_they_are_used()
+    {
+        var vbp = "Type=Exe\r\nForm=frmMain.frm\r\nForm=frmA.frm\r\nForm=frmStr.frm\r\nStartup=\"frmMain\"\r\n";
+        var (src, outDir) = UnusedProject(vbp,
+            ("frmMain.frm", FormFile("frmMain", "Sub X()\r\n    If F1 Then y = 1\r\n    frmA.Show\r\n    s = \"frmStr\"\r\nEnd Sub\r\n")),
+            ("frmA.frm", FormFile("frmA", "")), ("frmStr.frm", FormFile("frmStr", "")), ("frmLoose.frm", FormFile("frmLoose", "")));
+        File.AppendAllText(Path.Combine(src, "mFlags.bas"), "Sub Ac()\r\n    frmA.Show\r\nEnd Sub\r\n");
+        var report = ProjectProcessor.Run(UnusedOptions(src, outDir));
+        string Reason(string n) => report.KeptForms.Single(k => k.Name == n).Reason;
+        Assert.Contains("başlangıç formu", Reason("frmMain"));
+        // önce form olmayan modül gösterilir; frmMain temizlendiği için satır numarası çıktıdaki satırdır
+        Assert.Contains("mFlags.bas satır", Reason("frmA"));
+        Assert.Contains("+1 dosyada daha", Reason("frmA"));
+        Assert.Contains("string içinde", Reason("frmStr"));
+        Assert.Contains("listelenmiyor", Reason("frmLoose"));
     }
 
     [Fact]

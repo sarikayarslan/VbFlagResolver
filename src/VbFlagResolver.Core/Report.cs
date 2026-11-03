@@ -24,6 +24,9 @@ public sealed record ProcedureCall(string File, int Line, string Caller, string 
 /// <summary>Projede kullanılmadığı için .vbp'den çıkarılan form.</summary>
 public sealed record RemovedForm(string RelativePath, string Name, string Reason);
 
+/// <summary>Kullanılmayan form analizinde projede kalan form ve nedeni (nerede kullanıldığı).</summary>
+public sealed record KeptForm(string RelativePath, string Name, string Reason);
+
 public sealed class FileReport
 {
     public required string RelativePath { get; init; }
@@ -69,6 +72,8 @@ public sealed class Report
     public List<string> CopiedFiles { get; } = [];
     /// <summary>Projeden çıkarılan kullanılmayan formlar.</summary>
     public List<RemovedForm> RemovedForms { get; } = [];
+    /// <summary>Kullanılmayan form analizinde projede kalan formlar ve neden kaldıkları.</summary>
+    public List<KeptForm> KeptForms { get; } = [];
     public List<SourceNote> FormNotes { get; } = [];
     public Dictionary<string, int> FlagUsage { get; } = new(StringComparer.OrdinalIgnoreCase);
 
@@ -142,6 +147,13 @@ public sealed class Report
             foreach (var r in RemovedForms)
                 sb.AppendLine($"  {r.RelativePath} ({r.Name}) — {r.Reason}");
             AppendNotes(sb, "Form notları", FormNotes);
+            sb.AppendLine();
+        }
+        if (KeptForms.Count > 0)
+        {
+            sb.AppendLine($"KULLANILAN FORMLAR (projede kalan: {KeptForms.Count})");
+            foreach (var k in KeptForms)
+                sb.AppendLine($"  {k.RelativePath} ({k.Name}) — {k.Reason}");
             sb.AppendLine();
         }
         int unchanged = Files.Count(f => !f.Changed && f.Warnings.Count == 0 && !f.Failed && !f.KeptAsIs);

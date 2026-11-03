@@ -300,6 +300,8 @@ Sonuçlar:
   olan bayraklar (Bilinmiyor sayılır)
 - Dosya başına: silinen / açılan / sadeleşen blok ve tek satırlık If sayısı, satır satır değişiklik listesi
 - Kullanılmayan formlar seçeneği açıksa projeden çıkarılan formlar ve nedeni; adı string içinde geçtiği için bırakılan formlar
+- Kullanılmayan formlar seçeneği açıksa projede kalan her form ve neden kaldığı: nerede kullanıldığı (dosya ve satır; temizlenmiş
+  dosyalarda çıktıdaki yeni satır), başlangıç formu, .vbp'de listelenmemesi vb. Arayüzde form seçilince sağ altta da görünür.
 - Uyarılar: silinen kısımdaki fonksiyon çağrıları (VB'de kısa devre yok), silinen etiket/Dim/Const'un başka yerde
   kullanılması, silinen `On Error`, koşul dışında kullanılan bayraklar, çözümlenemeyen koşullar,
   etiket veya `:` içeren (bu yüzden değiştirilmeyen) blok satırları

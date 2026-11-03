@@ -187,9 +187,11 @@ public static class ProjectProcessor
         {
             var usageSel = o.UsageSelection ?? o.ProcessOnly;
             var analysis = new List<(string Rel, VbSourceFile File)>();
+            var cleanedRels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var (rel, file) in sources)
             {
                 bool cleaned = !ProcessOptions.MatchesKeep(rel, o.KeepAsIs) && (usageSel == null || ProcessOptions.MatchesKeep(rel, usageSel));
+                if (cleaned && report.Files.FirstOrDefault(x => x.RelativePath == rel) is { Changed: true }) cleanedRels.Add(rel);
                 var outBytes = outputs.First(x => x.Rel == rel).Bytes;
                 analysis.Add((rel, cleaned ? VbSourceFile.FromBytes(file.Path, outBytes, o.CodePage) : file));
             }
@@ -220,8 +222,9 @@ public static class ProjectProcessor
             report.ReferenceFileCount = refSeen.Count;
             var vbps = others.Where(f => Path.GetExtension(f).Equals(".vbp", StringComparison.OrdinalIgnoreCase))
                 .Select(f => (Path.GetRelativePath(src, f), File.ReadAllBytes(f))).ToList();
-            var (removed, formNotes) = UnusedForms.Find(analysis, vbps, o.CodePage, src, protectedRels);
+            var (removed, keptForms, formNotes) = UnusedForms.Find(analysis, vbps, o.CodePage, src, protectedRels, cleanedRels);
             report.RemovedForms.AddRange(removed);
+            report.KeptForms.AddRange(keptForms);
             report.FormNotes.AddRange(formNotes);
             foreach (var r in removed)
             {

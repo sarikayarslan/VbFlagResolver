@@ -1002,6 +1002,11 @@ internal sealed class MainForm : Form
             string? reason = _report.RemovedForms.FirstOrDefault(r => r.RelativePath == f.RelativePath)?.Reason;
             _lvDetails.Items.Insert(0, new ListViewItem(["", "", "Bu form projede hiçbir yerde kullanılmıyor: çıktıdaki .vbp'den çıkarılır, .frm/.frx kopyalanmaz. Nedeni: " + reason]) { ForeColor = Color.MediumPurple });
         }
+        else if (_report.KeptForms.FirstOrDefault(k => k.RelativePath == f.RelativePath) is { } keptForm)
+        {
+            // kullanılmayan form analizi açıkken: formun neden projede kaldığı
+            _lvDetails.Items.Insert(0, new ListViewItem(["", "FORM", "Projede kalıyor: " + keptForm.Reason]) { ForeColor = Color.SeaGreen });
+        }
         _lvDetails.EndUpdate();
 
         // "tüm satırlar" açılarak yeniden çizildiyse istenen satıra git ve ayrıntı satırını yeniden seç
