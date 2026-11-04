@@ -79,6 +79,8 @@ public sealed class Report
     public List<ProcedureCall> ProcedureCalls { get; } = [];
     public List<FileReport> Files { get; } = [];
     public List<string> CopiedFiles { get; } = [];
+    /// <summary>Kopyalanmayan .oca önbellek dosyaları (VB yeniden üretir).</summary>
+    public List<string> SkippedCacheFiles { get; } = [];
     /// <summary>Projeden çıkarılan kullanılmayan formlar.</summary>
     public List<RemovedForm> RemovedForms { get; } = [];
     /// <summary>Kullanılmayan form analizinde projede kalan formlar ve neden kaldıkları.</summary>
@@ -174,6 +176,8 @@ public sealed class Report
         int unchanged = Files.Count(f => !f.Changed && f.Warnings.Count == 0 && !f.Failed && !f.KeptAsIs);
         if (unchanged > 0) sb.AppendLine($"Değişmeyen dosya: {unchanged}");
         if (CopiedFiles.Count > 0) sb.AppendLine($"Olduğu gibi kopyalanan diğer dosya: {CopiedFiles.Count}");
+        if (SkippedCacheFiles.Count > 0)
+            sb.AppendLine($"Kopyalanmayan .oca önbellek dosyası: {SkippedCacheFiles.Count} (VB proje açılınca yeniden üretir; eski .oca IDE'yi çökertebilir)");
         sb.AppendLine($"Toplam uyarı: {WarningCount}");
         return sb.ToString();
     }

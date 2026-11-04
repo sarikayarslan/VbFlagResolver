@@ -251,6 +251,10 @@ public static class ProjectProcessor
         var removedFrx = new HashSet<string>(removedPaths.Select(p => Path.ChangeExtension(p, ".frx")), StringComparer.OrdinalIgnoreCase);
 
         // 5) yazma
+        // .oca: VB'nin OCX tür bilgisi önbelleği; başka yere taşınınca kayıtlı OCX ile uyuşmayıp IDE'yi çökertebilir.
+        // Kopyalanmaz, VB proje açılınca yeniden üretir.
+        foreach (var f in others.Where(IsOcxCache)) report.SkippedCacheFiles.Add(Path.GetRelativePath(src, f));
+        others.RemoveAll(IsOcxCache);
         foreach (var f in others) report.CopiedFiles.Add(Path.GetRelativePath(src, f));
         if (!o.DryRun)
         {
@@ -382,6 +386,8 @@ public static class ProjectProcessor
         Directory.CreateDirectory(Path.GetDirectoryName(target)!);
         File.WriteAllBytes(target, bytes);
     }
+
+    private static bool IsOcxCache(string f) => Path.GetExtension(f).Equals(".oca", StringComparison.OrdinalIgnoreCase);
 
     private static bool SamePath(string a, string b)
         => string.Equals(Path.GetFullPath(a).TrimEnd('\\', '/'), Path.GetFullPath(b).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase);

@@ -480,6 +480,25 @@ public class ProjectProcessorTests
     }
 
     [Fact]
+    public void Oca_cache_is_not_copied_and_binaries_are_byte_exact()
+    {
+        var (src, outDir) = UnusedProject(UnusedVbp, ("frmMain.frm", FormFile("frmMain", "")));
+        byte[] dll = [0x4D, 0x5A, 0x00, 0x0D, 0x0A, 0xFF, 0x1A];
+        Directory.CreateDirectory(Path.Combine(src, "Lib"));
+        File.WriteAllBytes(Path.Combine(src, "Lib", "Ortak.dll"), dll);
+        File.WriteAllBytes(Path.Combine(src, "Lib", "Grid.ocx"), dll);
+        File.WriteAllBytes(Path.Combine(src, "Lib", "Grid.oca"), [1, 2]);
+
+        var report = ProjectProcessor.Run(UnusedOptions(src, outDir));
+
+        Assert.Equal(dll, File.ReadAllBytes(Path.Combine(outDir, "Lib", "Ortak.dll")));
+        Assert.Equal(dll, File.ReadAllBytes(Path.Combine(outDir, "Lib", "Grid.ocx")));
+        Assert.False(File.Exists(Path.Combine(outDir, "Lib", "Grid.oca")));
+        Assert.Equal([Path.Combine("Lib", "Grid.oca")], report.SkippedCacheFiles);
+        Assert.Contains(".oca", report.ToText());
+    }
+
+    [Fact]
     public void Unused_form_removal_is_off_by_default()
     {
         var (src, outDir) = UnusedProject(UnusedVbp,
